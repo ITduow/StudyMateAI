@@ -1,0 +1,6 @@
+{
+  "name": "StudyMate AI",
+  "description": "An intelligent full-stack study assistant that automatically generates summaries, quizzes, flashcards, document chat, and custom study plans from uploaded materials.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
