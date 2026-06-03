@@ -18,21 +18,17 @@ import { supabase, isSupabaseConfigured } from "./lib/supabase";
 /**
  * DEVELOPER NOTE — SUPABASE AUTHENTICATION URL CONFIGURATION:
  * -------------------------------------------------------------
- * To ensure the Forget / Reset password flow redirects to the proper
- * web screens, you MUST configure the following in your Supabase Dashboard:
+ * In Vercel Environment Variables:
+ * VITE_APP_URL=https://study-mate-ai.vercel.app
  * 
- * 1. Site URL:
- *    - production Vercel URL (e.g., https://your-domain.vercel.app)
+ * In Supabase Auth URL Configuration:
+ * Site URL:
+ * https://study-mate-ai.vercel.app
  * 
- * 2. Redirect URLs (Additional Redirect URLs):
- *    - https://your-domain.vercel.app/*
- *    - http://localhost:5173/*  (for local development routing)
- * 
- * 3. Environment Variables (VITE_APP_URL):
- *    - In Vercel, set:
- *      VITE_APP_URL=https://study-mate-ai.vercel.app
- *    - For local dev, use:
- *      VITE_APP_URL=http://localhost:5173
+ * Redirect URLs:
+ * https://study-mate-ai.vercel.app/*
+ * https://study-mate-ai.vercel.app/?auth=reset-password
+ * http://localhost:5173/*
  */
 
 export default function App() {
