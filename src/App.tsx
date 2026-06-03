@@ -27,6 +27,12 @@ import { supabase, isSupabaseConfigured } from "./lib/supabase";
  * 2. Redirect URLs (Additional Redirect URLs):
  *    - https://your-domain.vercel.app/*
  *    - http://localhost:5173/*  (for local development routing)
+ * 
+ * 3. Environment Variables (VITE_APP_URL):
+ *    - In Vercel, set:
+ *      VITE_APP_URL=https://study-mate-ai.vercel.app
+ *    - For local dev, use:
+ *      VITE_APP_URL=http://localhost:5173
  */
 
 export default function App() {
@@ -623,8 +629,9 @@ export default function App() {
       return { success: "In sandbox mode: password reset request simulated successfully." };
     }
     try {
+      const appUrl = (import.meta as any).env.VITE_APP_URL || window.location.origin;
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/?auth=reset-password`
+        redirectTo: `${appUrl}/?auth=reset-password`
       });
       if (error) return { error: error.message };
       return { success: "Password reset instructions have been dispatched. Check your email inbox." };
