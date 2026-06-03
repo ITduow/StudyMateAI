@@ -16,26 +16,32 @@ Deno.serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabaseServiceKey = Deno.env.get("SERVICE_ROLE_KEY") ?? "";
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY") ?? "";
-    const geminiModel = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
+    const modelsToTry = Array.from(new Set([
+      Deno.env.get("GEMINI_MODEL"),
+      "gemini-2.5-flash",
+      "gemini-3.5-flash",
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite"
+    ].filter(Boolean)));
 
     console.log("[generate-summary:env] Validating environment variables...");
     if (!supabaseUrl) {
       console.error("[generate-summary:env-error] SUPABASE_URL environment variable is missing.");
     }
     if (!supabaseServiceKey) {
-      console.error("[generate-summary:env-error] SUPABASE_SERVICE_ROLE_KEY environment variable is missing.");
+      console.error("[generate-summary:env-error] SERVICE_ROLE_KEY environment variable is missing.");
     }
     if (!geminiApiKey) {
       console.error("[generate-summary:env-error] GEMINI_API_KEY environment variable is missing.");
     }
-    console.log(`[generate-summary:gemini-config] Using model: ${geminiModel}`);
+    console.log(`[generate-summary:gemini-config] Primary model: ${Deno.env.get("GEMINI_MODEL")}. Configured models pool for trials: ${JSON.stringify(modelsToTry)}`);
 
     if (!supabaseUrl || !supabaseServiceKey) {
       return new Response(JSON.stringify({ 
         error: "Missing Supabase configuration env variables.",
-        details: "Ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are configured in Supabase Edge Secrets."
+        details: "Ensure SUPABASE_URL and SERVICE_ROLE_KEY are configured in Supabase Edge Secrets."
       }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -138,6 +144,93 @@ Deno.serve(async (req) => {
     }
     console.log(`[generate-summary:db-success] Found document "${doc.title}" for user.`);
 
+    // --- AI LIMITS CHECK ---
+    const action = "generate-summary";
+    const freeLimit = 5;
+    const premiumLimit = 100;
+    let isPremium = false;
+
+    try {
+      console.log(`[generate-summary:limit-check] Fetching user profile for limit check...`);
+      const { data: profile, error: profileErr } = await adminClient
+        .from("profiles")
+        .select("is_premium")
+        .eq("id", user.id)
+        .single();
+
+      if (profileErr || !profile) {
+        console.error(`[generate-summary:limit-check-error] Profile fetch error:`, profileErr);
+        return new Response(JSON.stringify({ 
+          error: "Unable to verify AI usage limit",
+          details: "Please try again later."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      isPremium = !!profile.is_premium;
+      console.log(`[generate-summary:limit-check] User profile found. isPremium: ${isPremium}`);
+
+      // Count today's rows from public.ai_usage_logs
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayStartISO = todayStart.toISOString();
+
+      const { data: logs, error: logsErr } = await adminClient
+        .from("ai_usage_logs")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("action", action)
+        .gte("created_at", todayStartISO);
+
+      if (logsErr) {
+        console.error(`[generate-summary:limit-check-error] Logs count fetch error:`, logsErr);
+        return new Response(JSON.stringify({ 
+          error: "Unable to verify AI usage limit",
+          details: "Please try again later."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const todayUsage = logs?.length || 0;
+      const limit = isPremium ? premiumLimit : freeLimit;
+      console.log(`[generate-summary:limit-check] Usage today: ${todayUsage}/${limit}`);
+
+      // Add detailed console logs as requested
+      console.log(`AI LIMITS CHECK RESPONSE FOR ${action}:`);
+      console.log(`- action: ${action}`);
+      console.log(`- is_premium: ${isPremium}`);
+      console.log(`- today usage count: ${todayUsage}`);
+      console.log(`- daily limit: ${limit}`);
+
+      if (todayUsage >= limit) {
+        console.log(`- blocked or allowed: blocked`);
+        console.warn(`[generate-summary:limit] Daily AI limit reached. todayUsage: ${todayUsage}, limit: ${limit}`);
+        return new Response(JSON.stringify({ 
+          error: "Daily AI limit reached",
+          details: "Upgrade to Premium to continue."
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      console.log(`- blocked or allowed: allowed`);
+    } catch (checkErr: any) {
+      console.error(`[generate-summary:limit-check-fatal] Fatal error during limit check:`, checkErr);
+      return new Response(JSON.stringify({ 
+        error: "Unable to verify AI usage limit",
+        details: "Please try again later."
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // --- END AI LIMITS CHECK ---
+
     const extractedText = doc.extracted_text || "";
     console.log(`[generate-summary:extractedText] Document source text length: ${extractedText.length} characters`);
     if (!extractedText.trim()) {
@@ -152,7 +245,7 @@ Deno.serve(async (req) => {
     }
 
     // 3. Make the API call to Gemini
-    console.log(`[generate-summary:gemini] Submitting request package to Gemini using API URL: https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}...`);
+    console.log(`[generate-summary:gemini] Readying task summary generation with fallback-enabled pool...`);
     const prompt = `Analyze the student's study material text below and compile a structured, highly valuable study summary document.
 You must return only a valid JSON object matching the following structure:
 {
@@ -172,33 +265,68 @@ ${extractedText}
 
 Your response must be ONLY valid JSON. Absolutely no markdown wrappers like \`\`\`json outside, conversational text, or preamble. Just raw JSON string.`;
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }],
-            },
-          ],
-          generationConfig: {
-            responseMimeType: "application/json",
-          },
-        }),
-      }
-    );
+    const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    console.log(`[generate-summary:gemini-response] API Response Status: ${response.status}`);
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("[generate-summary:gemini-error] Gemini API call returned bad response:", errText);
+    let response = null;
+    let successModel = "";
+    let errText = "";
+
+    for (let attempts = 0; attempts < modelsToTry.length; attempts++) {
+      const rawModel = modelsToTry[attempts];
+      const currentModel = rawModel.startsWith("models/") ? rawModel.substring(7) : rawModel;
+      console.log(`[generate-summary:gemini] Attempt ${attempts + 1} of ${modelsToTry.length} trying model: "${currentModel}"`);
+      try {
+        response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiApiKey}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [{ text: prompt }],
+                },
+              ],
+              generationConfig: {
+                responseMimeType: "application/json",
+              },
+            }),
+          }
+        );
+
+        console.log(`[generate-summary:gemini-response] Model "${currentModel}" status: ${response.status}`);
+        if (response.ok) {
+          successModel = currentModel;
+          console.log(`[generate-summary:gemini-success] Final success model: "${successModel}"`);
+          break;
+        }
+
+        errText = await response.text();
+        console.warn(`[generate-summary:gemini-warn] Model "${currentModel}" failed. Status ${response.status}. Details: ${errText}`);
+        
+        if (attempts + 1 < modelsToTry.length) {
+          const nextModel = modelsToTry[attempts + 1];
+          console.log(`[generate-summary:gemini-fallback] Fallback model selected: "${nextModel}"`);
+          await delay(500);
+        }
+      } catch (fetchErr: any) {
+        errText = fetchErr?.message || String(fetchErr);
+        console.error(`[generate-summary:gemini-error] Exception trying model "${currentModel}":`, fetchErr);
+        if (attempts + 1 < modelsToTry.length) {
+          const nextModel = modelsToTry[attempts + 1];
+          console.log(`[generate-summary:gemini-fallback] Fallback model selected: "${nextModel}"`);
+          await delay(500);
+        }
+      }
+    }
+
+    if (!response || !response.ok) {
+      console.error("[generate-summary:gemini-error] All configured models failed. Returning bad response.");
       return new Response(JSON.stringify({ 
-        error: "Gemini API call failed",
-        details: `Google AI status ${response.status}: ${errText}`
+        error: "Gemini API request failed",
+        details: "All configured Gemini models failed or exceeded quota. Please try again later."
       }), {
         status: 502,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -301,6 +429,28 @@ Your response must be ONLY valid JSON. Absolutely no markdown wrappers like \`\`
     }
 
     console.log(`[generate-summary:db-save-success] Summary successfully saved for Document ID: ${documentId}`);
+
+    // Log the AI usage securely
+    console.log("[usage-log] inserting", action, user.id, documentId);
+    const { error: logInsertErr } = await adminClient.from("ai_usage_logs").insert({
+      user_id: user.id,
+      document_id: documentId,
+      action: action
+    });
+
+    if (logInsertErr) {
+      console.error("[usage-log] insert failed", logInsertErr);
+      return new Response(JSON.stringify({ 
+        error: "Failed to record AI usage",
+        details: logInsertErr.message || "An error occurred while inserting the usage log."
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log("[usage-log] insert success");
+
     return new Response(JSON.stringify(savedSummary), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

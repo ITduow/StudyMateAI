@@ -6,9 +6,11 @@
 import React, { useState } from "react";
 import { 
   CheckCircle2, XCircle, ArrowRight, Home, RefreshCw, Trophy, 
-  HelpCircle, AlertCircle, BookOpen, ChevronRight, Bookmark, ArrowLeft
+  HelpCircle, AlertCircle, BookOpen, ChevronRight, Bookmark, ArrowLeft,
+  Download
 } from "lucide-react";
 import { Quiz, QuizQuestion } from "../types";
+import { exportQuizToCSV, exportQuizToPDF } from "../lib/exportUtils";
 
 interface QuizViewProps {
   quiz: Quiz;
@@ -321,6 +323,24 @@ export function QuizView({
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Retake Test
+            </button>
+
+            <button
+              onClick={() => exportQuizToCSV(quiz, "")}
+              className="px-5 py-3 bg-slate-100 hover:bg-slate-205 text-slate-705 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+              id="quiz-view-export-csv"
+            >
+              <Download className="h-3.5 w-3.5 text-slate-400" />
+              Export Quiz CSV
+            </button>
+
+            <button
+              onClick={() => exportQuizToPDF(quiz, "")}
+              className="px-5 py-3 bg-slate-100 hover:bg-slate-205 text-slate-705 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+              id="quiz-view-export-pdf"
+            >
+              <Download className="h-3.5 w-3.5 text-slate-400" />
+              Export Quiz PDF
             </button>
             
             <button

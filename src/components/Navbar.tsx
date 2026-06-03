@@ -11,7 +11,7 @@ interface NavbarProps {
   currentUser: User | null;
   onLogout: () => void;
   onSelectRole: (role: "student" | "admin") => void;
-  onUpgradeTier: (tier: "free" | "premium") => void;
+  onUpgradeTier: (tier: "free" | "premium" | "payos") => void;
   onNavigate: (view: string) => void;
   currentView: string;
 }
@@ -26,7 +26,7 @@ export function Navbar({
 }: NavbarProps) {
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
-  const handleUpgrade = (tier: "free" | "premium") => {
+  const handleUpgrade = (tier: "free" | "premium" | "payos") => {
     onUpgradeTier(tier);
     setShowUpgradeModal(false);
   };
@@ -101,35 +101,37 @@ export function Navbar({
                   ) : (
                     <button
                       onClick={() => setShowUpgradeModal(true)}
-                      className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-white/70 text-gray-700 hover:bg-white/90 border border-white/80 backdrop-blur-md transition-colors shadow-xs"
+                      className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-white/70 text-gray-700 hover:bg-white/90 border border-slate-200/50 backdrop-blur-md transition-colors shadow-xs cursor-pointer"
                       id="upgrade-button"
                     >
-                      <Sparkles className="h-3 w-3 mr-1 text-amber-500" />
-                      Free Level (Upgrade)
+                      <Sparkles className="h-3 w-3 mr-1 text-indigo-500 animate-pulse" />
+                      Free Account (Upgrade)
                     </button>
                   )}
                 </div>
 
                 {/* Role Switcher Selector */}
-                <div className="hidden lg:flex items-center bg-white/50 p-1 rounded-xl border border-white/85 text-xs font-mono shadow-xs backdrop-blur-md">
-                  <span className="px-2 text-gray-500 font-sans">Simulate Role:</span>
-                  <button
-                    onClick={() => onSelectRole("student")}
-                    className={`px-2 py-1 rounded-lg font-medium transition-colors ${
-                      currentUser.role === "student" ? "bg-white text-blue-600 shadow-xs border border-gray-200/40" : "text-gray-600 hover:text-gray-900"
-                    }`}
-                  >
-                    Student
-                  </button>
-                  <button
-                    onClick={() => onSelectRole("admin")}
-                    className={`px-2 py-1 rounded-lg font-medium transition-colors ${
-                      currentUser.role === "admin" ? "bg-white text-amber-600 shadow-xs border border-gray-200/40" : "text-gray-600 hover:text-gray-900"
-                    }`}
-                  >
-                    Admin
-                  </button>
-                </div>
+                {currentUser.role === "admin" && (import.meta as any).env?.DEV === true && (
+                  <div className="hidden lg:flex items-center bg-white/50 p-1 rounded-xl border border-white/85 text-xs font-mono shadow-xs backdrop-blur-md">
+                    <span className="px-2 text-gray-500 font-sans">Simulate Role:</span>
+                    <button
+                      onClick={() => onSelectRole("student")}
+                      className={`px-2 py-1 rounded-lg font-medium transition-colors ${
+                        (currentUser.role as string) === "student" ? "bg-white text-blue-600 shadow-xs border border-gray-200/40" : "text-gray-650 hover:text-gray-900"
+                      }`}
+                    >
+                      Student
+                    </button>
+                    <button
+                      onClick={() => onSelectRole("admin")}
+                      className={`px-2 py-1 rounded-lg font-medium transition-colors ${
+                        (currentUser.role as string) === "admin" ? "bg-white text-amber-600 shadow-xs border border-gray-200/40" : "text-gray-650 hover:text-gray-900"
+                      }`}
+                    >
+                      Admin
+                    </button>
+                  </div>
+                )}
 
                 {/* Profile Widget */}
                 <div className="flex items-center space-x-2">
@@ -150,8 +152,20 @@ export function Navbar({
               </>
             ) : (
               <button
-                onClick={() => onNavigate("home")}
-                className="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all focus:ring-4 focus:ring-blue-100"
+                onClick={() => {
+                  onNavigate("home");
+                  setTimeout(() => {
+                    const el = document.getElementById("auth-form-card");
+                    if (el) {
+                      el.scrollIntoView({ behavior: "smooth", block: "center" });
+                      const emailInput = el.querySelector("input[type='email']") as HTMLInputElement;
+                      if (emailInput) {
+                        emailInput.focus();
+                      }
+                    }
+                  }, 120);
+                }}
+                className="inline-flex items-center px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-all focus:ring-4 focus:ring-blue-100 cursor-pointer"
               >
                 Sign In
               </button>
@@ -195,20 +209,26 @@ export function Navbar({
               </ul>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-3">
               <button
-                onClick={() => setShowUpgradeModal(false)}
-                className="py-2.5 px-4 text-xs font-semibold text-gray-500 bg-gray-50 hover:bg-gray-100 rounded-xl transition-all border border-gray-200"
+                onClick={() => handleUpgrade("payos")}
+                className="w-full py-3 px-4 text-xs font-bold text-white bg-indigo-650 hover:bg-indigo-750 hover:scale-[1.01] shadow-md shadow-indigo-500/20 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                id="upgrade-payos-button"
               >
-                Stay Free
+                <Sparkles className="h-4 w-4 text-amber-300 animate-pulse" />
+                Upgrade with VietQR / Bank Transfer
               </button>
-              <button
-                onClick={() => handleUpgrade("premium")}
-                className="py-2.5 px-4 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 hover:scale-[1.02] shadow-md hover:shadow-indigo-500/20 rounded-xl transition-all flex items-center justify-center gap-1"
-              >
-                <DollarSign className="h-3.5 w-3.5" />
-                Unlock Premium
-              </button>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setShowUpgradeModal(false)}
+                  className="w-full py-2 px-3 text-xs font-semibold text-gray-500 bg-gray-50 hover:bg-gray-100 rounded-xl transition-all border border-gray-200 cursor-pointer text-center"
+                >
+                  Stay Free
+                </button>
+
+
+              </div>
             </div>
           </div>
         </div>

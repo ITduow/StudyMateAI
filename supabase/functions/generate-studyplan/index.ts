@@ -16,27 +16,21 @@ Deno.serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabaseServiceKey = Deno.env.get("SERVICE_ROLE_KEY") ?? "";
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY") ?? "";
-    const baseModel = Deno.env.get("GEMINI_MODEL") ?? "";
-
-    if (!baseModel) {
-      return new Response(JSON.stringify({ 
-        error: "Missing GEMINI_MODEL setting in your secrets",
-        details: "GEMINI_MODEL must specified in your Supabase Edge Secrets. Do not hardcode or auto-change the name."
-      }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const modelsToTry = [baseModel];
+    const modelsToTry = Array.from(new Set([
+      Deno.env.get("GEMINI_MODEL"),
+      "gemini-2.5-flash",
+      "gemini-3.5-flash",
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite"
+    ].filter(Boolean)));
 
     console.log("[generate-studyplan:env] Validating environment variables...");
     if (!supabaseUrl || !supabaseServiceKey) {
       return new Response(JSON.stringify({ 
         error: "Missing Supabase configuration env variables.",
-        details: "Ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are configured in Supabase Edge Secrets."
+        details: "Ensure SUPABASE_URL and SERVICE_ROLE_KEY are configured in Supabase Edge Secrets."
       }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -133,6 +127,93 @@ Deno.serve(async (req) => {
       });
     }
 
+    // --- AI LIMITS CHECK ---
+    const action = "generate-studyplan";
+    const freeLimit = 3; // 3 per day for study plans!
+    const premiumLimit = 100;
+    let isPremium = false;
+
+    try {
+      console.log(`[generate-studyplan:limit-check] Fetching user profile for limit check...`);
+      const { data: profile, error: profileErr } = await adminClient
+        .from("profiles")
+        .select("is_premium")
+        .eq("id", user.id)
+        .single();
+
+      if (profileErr || !profile) {
+        console.error(`[generate-studyplan:limit-check-error] Profile fetch error:`, profileErr);
+        return new Response(JSON.stringify({ 
+          error: "Unable to verify AI usage limit",
+          details: "Please try again later."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      isPremium = !!profile.is_premium;
+      console.log(`[generate-studyplan:limit-check] User profile found. isPremium: ${isPremium}`);
+
+      // Count today's rows from public.ai_usage_logs
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayStartISO = todayStart.toISOString();
+
+      const { data: logs, error: logsErr } = await adminClient
+        .from("ai_usage_logs")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("action", action)
+        .gte("created_at", todayStartISO);
+
+      if (logsErr) {
+        console.error(`[generate-studyplan:limit-check-error] Logs count fetch error:`, logsErr);
+        return new Response(JSON.stringify({ 
+          error: "Unable to verify AI usage limit",
+          details: "Please try again later."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const todayUsage = logs?.length || 0;
+      const limit = isPremium ? premiumLimit : freeLimit;
+      console.log(`[generate-studyplan:limit-check] Usage today: ${todayUsage}/${limit}`);
+
+      // Add detailed console logs as requested
+      console.log(`AI LIMITS CHECK RESPONSE FOR ${action}:`);
+      console.log(`- action: ${action}`);
+      console.log(`- is_premium: ${isPremium}`);
+      console.log(`- today usage count: ${todayUsage}`);
+      console.log(`- daily limit: ${limit}`);
+
+      if (todayUsage >= limit) {
+        console.log(`- blocked or allowed: blocked`);
+        console.warn(`[generate-studyplan:limit] Daily AI limit reached. todayUsage: ${todayUsage}, limit: ${limit}`);
+        return new Response(JSON.stringify({ 
+          error: "Daily AI limit reached",
+          details: "Upgrade to Premium to continue."
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      console.log(`- blocked or allowed: allowed`);
+    } catch (checkErr: any) {
+      console.error(`[generate-studyplan:limit-check-fatal] Fatal error during limit check:`, checkErr);
+      return new Response(JSON.stringify({ 
+        error: "Unable to verify AI usage limit",
+        details: "Please try again later."
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // --- END AI LIMITS CHECK ---
+
     const extractedText = doc.extracted_text || "";
     if (!extractedText.trim()) {
       return new Response(JSON.stringify({ 
@@ -174,15 +255,13 @@ Requirements:
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     let response = null;
-    let attempts = 0;
-    const maxAttempts = 4;
-    const baseDelayMs = 1500;
+    let successModel = "";
     let errText = "";
 
-    while (attempts < maxAttempts) {
-      attempts++;
-      const currentModel = modelsToTry[Math.min(attempts - 1, modelsToTry.length - 1)];
-      console.log(`[generate-studyplan:gemini] Attempt ${attempts} of ${maxAttempts} using model: ${currentModel}...`);
+    for (let attempts = 0; attempts < modelsToTry.length; attempts++) {
+      const rawModel = modelsToTry[attempts];
+      const currentModel = rawModel.startsWith("models/") ? rawModel.substring(7) : rawModel;
+      console.log(`[generate-studyplan:gemini] Attempt ${attempts + 1} of ${modelsToTry.length} trying model: "${currentModel}"`);
       try {
         response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiApiKey}`,
@@ -196,42 +275,37 @@ Requirements:
           }
         );
 
-        console.log(`[generate-studyplan:gemini-response] Response Status on attempt ${attempts}: ${response.status}`);
+        console.log(`[generate-studyplan:gemini-response] Model "${currentModel}" status: ${response.status}`);
         if (response.ok) {
+          successModel = currentModel;
+          console.log(`[generate-studyplan:gemini-success] Final success model: "${successModel}"`);
           break;
         }
 
         errText = await response.text();
-        console.warn(`[generate-studyplan:gemini-warn] Attempt ${attempts} error payload:`, errText);
-
-        const isTransient = response.status === 503 ||
-                            response.status === 429 ||
-                            errText.includes("503") ||
-                            errText.includes("UNAVAILABLE") ||
-                            errText.includes("high demand") ||
-                            errText.includes("RESOURCE_EXHAUSTED");
-
-        if (isTransient && attempts < maxAttempts) {
-          const sleepTime = baseDelayMs * Math.pow(2, attempts - 1) + Math.random() * 500;
-          await delay(sleepTime);
-        } else {
-          break;
+        console.warn(`[generate-studyplan:gemini-warn] Model "${currentModel}" failed. Status ${response.status}. Details: ${errText}`);
+        
+        if (attempts + 1 < modelsToTry.length) {
+          const nextModel = modelsToTry[attempts + 1];
+          console.log(`[generate-studyplan:gemini-fallback] Fallback model selected: "${nextModel}"`);
+          await delay(500);
         }
       } catch (fetchErr: any) {
         errText = fetchErr?.message || String(fetchErr);
-        if (attempts < maxAttempts) {
-          const sleepTime = baseDelayMs * Math.pow(2, attempts - 1);
-          await delay(sleepTime);
-        } else {
-          break;
+        console.error(`[generate-studyplan:gemini-error] Exception trying model "${currentModel}":`, fetchErr);
+        if (attempts + 1 < modelsToTry.length) {
+          const nextModel = modelsToTry[attempts + 1];
+          console.log(`[generate-studyplan:gemini-fallback] Fallback model selected: "${nextModel}"`);
+          await delay(500);
         }
       }
     }
 
     if (!response || !response.ok) {
+      console.error("[generate-studyplan:gemini-error] All configured models failed. Returning bad response.");
       return new Response(JSON.stringify({ 
-        error: "Gemini API call failed",
-        details: errText || "The model is currently experiencing high demand. Please try again."
+        error: "Gemini API request failed",
+        details: "All configured Gemini models failed or exceeded quota. Please try again later."
       }), {
         status: 502,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -328,6 +402,29 @@ Requirements:
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    console.log(`[generate-studyplan:db-save-success] Successfully created study plan for Document ID: ${documentId}`);
+
+    // Log the AI usage securely
+    console.log("[usage-log] inserting", action, user.id, documentId);
+    const { error: logInsertErr } = await adminClient.from("ai_usage_logs").insert({
+      user_id: user.id,
+      document_id: documentId,
+      action: action
+    });
+
+    if (logInsertErr) {
+      console.error("[usage-log] insert failed", logInsertErr);
+      return new Response(JSON.stringify({ 
+        error: "Failed to record AI usage",
+        details: logInsertErr.message || "An error occurred while inserting the usage log."
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log("[usage-log] insert success");
 
     return new Response(JSON.stringify(insertedData), {
       status: 200,

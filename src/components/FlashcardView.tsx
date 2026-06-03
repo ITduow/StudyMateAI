@@ -6,9 +6,11 @@
 import React, { useState } from "react";
 import { 
   Bookmark, ChevronRight, ChevronLeft, HelpCircle, RefreshCw, Star, 
-  Trash2, Brain, ArrowLeft, RotateCw, Smile, Frown, CheckSquare 
+  Trash2, Brain, ArrowLeft, RotateCw, Smile, Frown, CheckSquare,
+  Download
 } from "lucide-react";
 import { Flashcard } from "../types";
+import { exportFlashcardsToCSV, exportFlashcardsToPDF } from "../lib/exportUtils";
 
 interface FlashcardViewProps {
   flashcards: Flashcard[];
@@ -234,6 +236,25 @@ export function FlashcardView({
             </button>
           </div>
 
+          <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
+            <button
+              onClick={() => exportFlashcardsToCSV(cards, "")}
+              className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-205 text-slate-705 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              id="fc-completion-export-csv"
+            >
+              <Download className="h-3.5 w-3.5 text-slate-400" />
+              Export Deck CSV
+            </button>
+            <button
+              onClick={() => exportFlashcardsToPDF(cards, "")}
+              className="flex-1 py-2.5 px-4 bg-slate-100 hover:bg-slate-205 text-slate-705 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+              id="fc-completion-export-pdf"
+            >
+              <Download className="h-3.5 w-3.5 text-slate-400" />
+              Export Deck PDF
+            </button>
+          </div>
+
           <div>
             <button
               onClick={onBack}
@@ -251,7 +272,7 @@ export function FlashcardView({
     <div className="max-w-xl mx-auto px-4 py-8 space-y-6 animate-fade-in" id="active-flashcards-page">
       
       {/* Header Navigator panel */}
-      <div className="glass-effect-card p-4 rounded-xl shadow-sm flex justify-between items-center">
+      <div className="glass-effect-card p-4 rounded-xl shadow-sm flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div className="flex items-center space-x-2.5">
           <button
             onClick={onBack}
@@ -267,9 +288,29 @@ export function FlashcardView({
           </div>
         </div>
 
-        <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50/70 border border-blue-100/40 px-3 py-1 rounded-full">
-          Card {activeIndex + 1} of {cards.length}
-        </span>
+        <div className="flex items-center gap-2 src-flashcard-header-exports">
+          <button
+            onClick={() => exportFlashcardsToCSV(cards, "")}
+            title="Export deck to CSV"
+            className="p-1.5 bg-white/60 hover:bg-slate-50 text-gray-500 hover:text-slate-800 border border-white/70 rounded-lg text-xs leading-none transition-colors cursor-pointer flex items-center gap-1.5"
+            id="export-active-fc-csv"
+          >
+            <Download className="h-3.5 w-3.5 text-slate-400" />
+            CSV
+          </button>
+          <button
+            onClick={() => exportFlashcardsToPDF(cards, "")}
+            title="Export deck to PDF"
+            className="p-1.5 bg-white/60 hover:bg-slate-50 text-gray-500 hover:text-slate-805 border border-white/70 rounded-lg text-xs leading-none transition-colors cursor-pointer flex items-center gap-1.5"
+            id="export-active-fc-pdf"
+          >
+            <Download className="h-3.5 w-3.5 text-slate-400" />
+            PDF
+          </button>
+          <span className="text-xs font-mono font-bold text-blue-600 bg-blue-50/70 border border-blue-100/40 px-3 py-1 rounded-full">
+            Card {activeIndex + 1} of {cards.length}
+          </span>
+        </div>
       </div>
 
       {/* 3D Flippable Card perspective wrapper */}

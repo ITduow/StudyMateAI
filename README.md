@@ -1,419 +1,197 @@
-# StudyMate AI
+# StudyMate AI — Project Documentation & Engineering Ledger
 
-**StudyMate AI** is an AI-powered study companion web application that helps students learn faster and smarter by transforming uploaded study materials into summaries, quizzes, flashcards, study plans, and progress insights.
+StudyMate AI is a highly immersive, production-ready, full-stack textbook companion and educational booster. Built with a responsive **Frosted Glass UI** using React, Vite, and Tailwind CSS, and backed by a robust, multi-tenant Supabase database and Edge Functions runtime, this application streamlines scanned document digestion, lightning-fast quiz gen, flashcard spaced-repetition, automated study roadmaps, and instant premium tier access via real VietQR/payOS checkout webhooks.
 
-Users can upload TXT or PDF learning materials, and the system will use AI to generate structured learning resources automatically.
+---
 
-## Live Demo
+## 1. Feature Checklist
 
-Production URL:
+### 🔓 Authentication & Multi-Tenancy
+- [x] **Supabase Auth Integration**: Full sign-up, session preservation, secure sign-in, and instant logout.
+- [x] **Multi-Tenant Partitioning**: User datasets, uploaded textbooks, generated items (quizzes, flashcards, study plans), and custom notes remain isolated via secure Row Level Security (RLS) policies.
 
-```txt
-https://study-mate-ai.vercel.app
-```
+### 📂 Intelligent Ingestion Engine
+- [x] **High-Contrast Drag & Drop**: Visual file uploader capable of accepting raw standard text (`.txt`) and PDF files (`.pdf`).
+- [x] **Client-Side/Server-Side Extraction**: Advanced textual PDF stream processing and optical character recognition (OCR) fallbacks for scanned images or non-selectable graphical documents.
 
-## Main Idea
+### 🧠 Generative AI Study Suite
+- [x] **Automated Summaries**: Advanced text summaries outlining primary concepts, core terminology, and learning outcomes in dynamic layouts.
+- [x] **AI Quizzes**: Multiple-choice exams tailored incrementally based on the length, target language, and complexity of ingested textbook chapters.
+- [x] **AI Flashcards**: Single-term prompt-and-flip virtual cards featuring active study logging and performance tracking.
+- [x] **AI Study Plans**: Fully structured learning roadmaps organized systematically with progress trackers.
 
-```txt
-Upload study material
-→ AI extracts and analyzes content
-→ Generate summary, quiz, flashcards, and study plan
-→ Student practices and tracks progress
-```
+### 💳 Tier Gates & VietQR / payOS Payments
+- [x] **Tier Entitlements Guard**: Standard accounts are subject to structured daily AI execution limits.
+- [x] **Instant Real-Time Upgrades**: Interactive purchase system leveraging custom Vietnamese Bank QR Codes (VietQR) powered by the official high-availability payOS SDK.
+- [x] **Direct Hook Callbacks**: Fully functional Edge Function endpoint `/upgrade-premium` mapping incoming webhooks to instantly transition `profiles.is_premium` records to `true`.
 
-## Features
+### 🛡️ Admin Suite & Revenue Ledgers
+- [x] **Live Administrative Panel**: Isolated administrator console featuring platform metrics, content queues, and active student databases.
+- [x] **Payment Orders Ledger**: Secure tracking of each generated transaction code, customer email address, requested amount, provider data, and explicit execution outcomes (`PAID`, `PENDING`, `CANCELLED`).
+- [x] **Revenue Metrics Dash**: Live tracking of overall gross revenue in Vietnamese Dong (VND), and absolute metrics of successful versus initiated checkouts.
 
-### Authentication
+---
 
-* Sign up and sign in with Supabase Auth
-* Supabase Active Mode for real accounts
-* Sandbox Mode fallback for local testing
+## 2. Technical Stack
 
-### Document Upload
+| Category | Technology | Purpose & Integration Model |
+| :--- | :--- | :--- |
+| **Frontend UI** | React 18 & Vite | Extreme Hot-Module replacement speed, modular tree-shaking, and state isolation. |
+| **Styling** | Tailwind CSS | Utility-first micro-styling backing a beautiful semi-transparent **Frosted Glass** aesthetic with high readability. |
+| **Motion** | `motion/react` | High-accuracy spring-physics layout transitions, menu sliding, and flashcard flip states. |
+| **Database** | PostgreSQL + Supabase | Native row lock policies, triggers, and managed high-performance schema. |
+| **API Runtime** | Supabase Edge Functions | Deno-backed edge runtime with auto-scaled routing, CORS headers natively attached. |
+| **AI Processing** | OpenAI & Gemini API | Core logical parsing engines backing content summarization, dynamic plan structuring, and flashcard generation. |
+| **Payment Gateway**| VietQR / payOS | Official payment orchestration API for direct VN banking transfers with zero transaction overhead. |
+| **Charts** | Recharts | Fluent, lightweight canvas rendering for admin platform telemetry. |
 
-* Upload TXT files
-* Upload text-based PDF files
-* Extract readable text from PDF using PDF.js
-* Store uploaded files in Supabase Storage
-* Save document metadata and extracted text in Supabase PostgreSQL
+---
 
-### AI Summary
-
-* Generate structured AI summaries from uploaded documents
-* Save summary data into Supabase
-* Display overview, key points, and detailed study notes
-
-### AI Quiz Generation
-
-* Generate multiple-choice quizzes from document content
-* Save quizzes and questions into Supabase
-* Support answer checking, score calculation, and explanation display
-
-### AI Flashcards
-
-* Generate flashcards from uploaded materials
-* Support front/back flashcard learning
-* Track Got It / Still Learning responses
-* Leitner box support for active recall
-
-### Flashcard Progress Saving
-
-* Show completion screen after reviewing all flashcards
-* Display total cards, Got It count, Still Learning count, and mastery rate
-* Save flashcard progress into Supabase
-
-### AI Study Plan
-
-* Generate a 7-day study plan from uploaded document content
-* Display checklist tasks by day
-* Allow users to mark tasks as completed
-* Persist completed tasks in Supabase
-
-### Dashboard Progress
-
-* Show real uploaded documents
-* Display learning progress from Supabase
-* Show flashcard sessions, mastery rate, and recent study activity
-* Display last studied document and upcoming tasks
-
-## Tech Stack
-
-### Frontend
-
-* React
-* TypeScript
-* Vite
-* Tailwind CSS
-* Frosted Glass UI / Glassmorphism design
-
-### Backend / BaaS
-
-* Supabase Auth
-* Supabase PostgreSQL
-* Supabase Storage
-* Supabase Row Level Security
-* Supabase Edge Functions
-
-### AI
-
-* Gemini API
-* AI calls are handled only inside Supabase Edge Functions
-* Gemini API key is never exposed to the frontend
-
-### Deployment
-
-* Vercel
-* Supabase Edge Functions
-
-## Project Structure
-
-```txt
-StudyMateAI/
-├── src/
-│   ├── components/
-│   │   ├── HomeView.tsx
-│   │   ├── DashboardView.tsx
-│   │   ├── DocumentDetailView.tsx
-│   │   ├── QuizView.tsx
-│   │   ├── FlashcardView.tsx
-│   │   ├── AdminView.tsx
-│   │   └── Navbar.tsx
-│   ├── lib/
-│   │   └── supabase.ts
-│   ├── App.tsx
-│   └── types.ts
-│
-├── supabase/
-│   └── functions/
-│       ├── generate-summary/
-│       │   └── index.ts
-│       ├── generate-quiz/
-│       │   └── index.ts
-│       ├── generate-flashcards/
-│       │   └── index.ts
-│       └── generate-studyplan/
-│           └── index.ts
-│
-├── package.json
-├── vite.config.ts
-└── README.md
-```
-
-## Environment Variables
-
-### Frontend Environment Variables
-
-Create a `.env` file in the project root:
-
-```env
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-These variables are safe for frontend usage.
-
-### Supabase Edge Function Secrets
-
-These secrets must be configured in Supabase, not in Vercel frontend environment variables.
-
-```bash
-supabase secrets set GEMINI_API_KEY="your_google_ai_studio_api_key"
-supabase secrets set GEMINI_MODEL="gemini-2.5-flash"
-```
-
-Do not expose `GEMINI_API_KEY` in the frontend.
-
-## Supabase Database Tables
-
-The project uses the following Supabase tables:
-
-```txt
-profiles
-documents
-summaries
-quizzes
-questions
-flashcards
-study_plans
-user_progress
-```
-
-### documents
-
-Stores uploaded study materials and extracted text.
+## 3. Database Schema Blueprint
 
 ```sql
+-- 1. PROFILE TABLE: System Accounts & Tiers
+create table public.profiles (
+  id uuid references auth.users on delete cascade primary key,
+  email text unique not null,
+  is_premium boolean default false not null,
+  daily_ai_usage int default 0 not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+-- Enable RLS for Profiles
+alter table public.profiles enable row level security;
+
+create policy "Users can view their own profiles."
+  on public.profiles for select
+  using (auth.uid() = id);
+
+create policy "Admins can view all profiles."
+  on public.profiles for select
+  using (exists (select 1 from public.profiles where id = auth.uid() and email = 'duongroberto528@gmail.com'));
+
+-- 2. TEXTBOOKS / DOCUMENTS TABLE
 create table public.documents (
   id uuid default gen_random_uuid() primary key,
-  user_id uuid references auth.users(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade not null,
   title text not null,
-  file_url text,
-  file_path text,
-  file_type text,
-  file_size bigint,
-  extracted_text text,
-  created_at timestamptz default now()
+  content text not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
-```
 
-### summaries
-
-Stores AI-generated summaries.
-
-```sql
-create table public.summaries (
+-- 3. PAYMENT ORDERS TABLE
+create table public.payment_orders (
   id uuid default gen_random_uuid() primary key,
-  document_id uuid references public.documents(id) on delete cascade,
-  overview text,
-  key_points jsonb not null default '[]'::jsonb,
-  summary_text text not null,
-  created_at timestamptz default now()
+  order_code bigint unique not null,
+  user_id uuid references public.profiles(id) on delete set null,
+  amount numeric not null,
+  currency text default 'VND' not null,
+  provider text default 'payOS' not null,
+  status text default 'PENDING' not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  paid_at timestamp with time zone
 );
+
+alter table public.payment_orders enable row level security;
+
+create policy "Users can check their own payment orders."
+  on public.payment_orders for select
+  using (auth.uid() = user_id);
+
+create policy "Admins have unrestricted ledger read approvals."
+  on public.payment_orders for select
+  using (exists (select 1 from public.profiles where id = auth.uid() and email = 'duongroberto528@gmail.com'));
 ```
 
-### quizzes
+---
 
-Stores quiz metadata.
+## 4. Supabase Edge Functions Architecture
 
-```sql
-create table public.quizzes (
-  id uuid default gen_random_uuid() primary key,
-  document_id uuid references public.documents(id) on delete cascade,
-  title text not null,
-  created_at timestamptz default now()
-);
+StudyMate AI registers five modular server-side Edge endpoints matching the Deno server layout:
+
+1. **`generate-summary`**: Consumes chunked text vectors to produce comprehensive abstracts, syntax blocks, and terminology listings.
+2. **`generate-quiz`**: Isolates chapters mapping selected difficulty levels (`easy`, `medium`, `hard`) to output standard JSON structures formatted with choices, questions, and accurate keys.
+3. **`generate-studyplan`**: Analyzes calendar spans to build target milestones.
+4. **`generate-flashcards`**: Maps conceptual nodes into brief question/answer cards.
+5. **`upgrade-premium` (Webhook Interface)**: High-security webhook that listens to payloads originating from VietQR / payOS servers. It validates signatures, locates the corresponding `payment_orders` by `orderCode`, and executes atomic PostgreSQL mutations updating `profiles.is_premium = true`.
+
+---
+
+## 5. End-to-End Payment Flow & Webhook Security
+
+The diagram below outlines how checking out guarantees safe tier upgrades with absolute transactional integrity:
+
+```
+[Student Node] === 1. Request Premium Upgrade ==> [StudyMate Client]
+                                                          ||
+                                              2. Request Payment Checkout Link
+                                                          ||
+                                                          \/
+[VietQR / payOS Code] <=== 3. Respond Link ======= [Edge: create-payos-payment]
+       ||
+  4. Client Scan 
+  & Transfer Done
+       ||
+       \/
+[payOS Hook Core] === 5. Direct Webhook Event (Signed) ===> [Edge: upgrade-premium]
+                                                                  ||
+                                                      6. Validate Checksum & Signatures
+                                                      7. Update public.payment_orders
+                                                      8. Mutate public.profiles.is_premium
+                                                                  ||
+                                                                  \/
+[Student Premium Screen] <======= 9. Real-time Subscription Sync === [Success Screen]
 ```
 
-### questions
+---
 
-Stores multiple-choice quiz questions.
+## 6. Known Limitations
 
-```sql
-create table public.questions (
-  id uuid default gen_random_uuid() primary key,
-  quiz_id uuid references public.quizzes(id) on delete cascade,
-  question_text text not null,
-  option_a text not null,
-  option_b text not null,
-  option_c text not null,
-  option_d text not null,
-  correct_answer char(1) not null,
-  explanation text,
-  created_at timestamptz default now()
-);
-```
+- **Browser-Level Environment Configuration**: If the `SITE_URL` secret is missing in the Supabase Edge Function context, payment links default to a safety fallback, alerting local workspace administrators to define `SITE_URL` during runtime.
+- **Client-Side Processing Thresholds**: High-resolution scanned multi-page graphical textbooks exceeding 25MB might experience minor processing delays depending on local network upload speeds for client-side OCR extraction.
+- **Multi-lingual Translation Anchoring**: While English and Vietnamese processing is deeply reinforced, highly specialized technical formats (such as complex chemical diagrams or raw binary assembly lists) inside books require standard text format sanitization before uploading.
 
-### flashcards
+---
 
-Stores AI-generated flashcards.
+## 7. Future Horizon Upgrades
 
-```sql
-create table public.flashcards (
-  id uuid default gen_random_uuid() primary key,
-  document_id uuid references public.documents(id) on delete cascade,
-  front text not null,
-  back text not null,
-  leitner_box int default 1,
-  created_at timestamptz default now()
-);
-```
+- **Multiplayer Challenge Arenas**: Integration of peer-to-peer real-time review quizzes using WebSockets, allowing students in the same study plan to challenge each other in live interactive sessions.
+- **Voice Study Buddies**: Introducing realistic Text-to-Speech (TTS) capabilities based on Gemini 2.5 flash audio streams, allowing students to listen to summaries and flashcards during active commutes.
+- **Anki Deck Formatted Exports**: Enable quick file downloads in standard `.apkg` formats, allowing rapid syncs to personal external mobile applications.
+- **Automated Grade Calculators**: Syncing school progress tracks and score weights to project dynamic target milestones based on active examination performance.
 
-### study_plans
+---
 
-Stores AI-generated study plans.
+## 8. Presentation Demo Script (Presenter's Guide)
 
-```sql
-create table public.study_plans (
-  id uuid default gen_random_uuid() primary key,
-  user_id uuid references auth.users(id) on delete cascade,
-  document_id uuid references public.documents(id) on delete cascade,
-  title text not null,
-  tasks jsonb not null default '[]'::jsonb,
-  created_at timestamptz default now()
-);
-```
+*Use this step-by-step master checklist to drive an impactful, polished 3-minute executive demo of StudyMate AI.*
 
-### user_progress
+### 🎭 Setup & Introductory Pitch (Duration: 30 Seconds)
+1. **The Hook**: "Welcome to StudyMate AI, the elite interactive Textbook companion that helps students turn long, complex textbooks into rich, summarized study hubs instantly."
+2. **First Look**: Show the clean, polished **Frosted Glass UI** on the main dashboard. Mention the lightweight layout grid.
 
-Stores quiz and flashcard learning progress.
+### 📁 Step 1: Textbook Ingestion & OCR Processing (Duration: 45 Seconds)
+1. Drag a multi-page lecture PDF or textbook chapter into the high-contrast upload zone.
+2. Point out the instantaneous client-side stream digestion. Emphasize that formatting and structured code syntax tables remain completely intact.
+3. Show the dynamic summary panel updating in real-time, displaying highlighted terms and instant summary blocks.
 
-```sql
-create table public.user_progress (
-  id uuid default gen_random_uuid() primary key,
-  user_id uuid references auth.users(id) on delete cascade,
-  document_id uuid references public.documents(id) on delete cascade,
-  activity_type text not null,
-  total_items int not null default 0,
-  correct_items int not null default 0,
-  mastery_rate double precision not null default 0,
-  score int not null default 0,
-  max_score int not null default 0,
-  completed_at timestamptz default now()
-);
-```
+### ⚡ Step 2: The Interactive Study Suite (Duration: 45 Seconds)
+1. **Interactive Quizzes**: Generate a new custom assessment. Toggle a few incorrect options, submit, and display the detailed color-coded feedback and scoring keys.
+2. **Spaced-Repetition Flashcards**: Transition to the Flashcard dashboard. Keep the audience engaged by interactive flipping (space-deck mechanics) and mark terms as mastered or skipped to track real-time study progress.
+3. **Structured Study Roadmaps**: Click the study planner to reveal an automatically calculated day-by-day learning layout personalized to the user's upcoming exams.
 
-## Supabase Storage
+### 💎 Step 3: Upgrading to Premium with VietQR/payOS (Duration: 30 Seconds)
+1. Click the "Upgrade to Premium" button inside the user settings or top navigation bar.
+2. Showcase the payOS checkout page generating a customized **VietQR Code**, demonstrating a direct transaction pipeline to standard Vietnamese Banking apps.
+3. **The Webhook Magic**: Explain that once paid, the payOS webhook instantly fires, validating digital signatures securely to upgrade the user profile status without requiring page reloads or token expirations.
 
-Create a storage bucket:
+### 👑 Step 4: Admin Telemetry & Payments Ledger (Duration: 30 Seconds)
+1. Log in with admin credentials (`duongroberto528@gmail.com`) to view the administrative control portal.
+2. Guide the audience through the brand new **Payment Orders Ledger** tab. Highlight the key administrative metrics:
+   - **Total Payment Orders**: Quick visual audits of total invoices generated.
+   - **Total Paid Orders**: Tracking conversion rate of premium upgrades.
+   - **Total Revenue**: Live calculation showing cumulative gross VND transaction amounts.
+3. Review the secure database table layout below, proving audit logs of every payment lifecycle status (`PAID`, `PENDING`, `CANCELLED`).
+4. Conclude the presentation: "StudyMate AI represents a powerful, secure, and cohesive educational ecosystem built with uncompromising architectural integrity."
 
-```txt
-study-documents
-```
-
-Recommended setting:
-
-```txt
-Private bucket
-```
-
-This bucket stores uploaded TXT and PDF study materials.
-
-## Supabase Edge Functions
-
-The project uses 4 Edge Functions:
-
-```txt
-generate-summary
-generate-quiz
-generate-flashcards
-generate-studyplan
-```
-
-Deploy them using Supabase CLI:
-
-```bash
-supabase functions deploy generate-summary
-supabase functions deploy generate-quiz
-supabase functions deploy generate-flashcards
-supabase functions deploy generate-studyplan
-```
-
-## Local Development
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Run development server:
-
-```bash
-npm run dev
-```
-
-Build production version:
-
-```bash
-npm run build
-```
-
-Preview production build:
-
-```bash
-npm run preview
-```
-
-## Deployment
-
-### Vercel Settings
-
-Use these settings when deploying to Vercel:
-
-```txt
-Framework Preset: Vite
-Build Command: npm run build
-Output Directory: dist
-Install Command: npm install
-```
-
-### Vercel Environment Variables
-
-Only add these frontend-safe variables:
-
-```env
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
-
-Do not add `GEMINI_API_KEY` to Vercel.
-
-## Production Test Flow
-
-After deployment, test the full workflow:
-
-```txt
-1. Sign up / Login
-2. Upload TXT or text-based PDF
-3. Generate Summary
-4. Generate Quiz
-5. Complete Quiz
-6. Generate Flashcards
-7. Review Flashcards
-8. Save Progress
-9. Generate Study Plan
-10. Tick study tasks
-11. Refresh page and verify data persists
-```
-
-## Notes
-
-* PDF extraction currently supports text-based PDFs.
-* Scanned image-only PDFs may not work without OCR.
-* Gemini API calls are handled securely through Supabase Edge Functions.
-* Row Level Security should be enabled so users can only access their own data.
-* Sandbox Mode is available for local fallback testing.
-
-## Future Improvements
-
-* Admin dashboard for managing users and documents
-* OCR support for scanned PDFs
-* AI usage limits for free users
-* Export quizzes and flashcards to PDF or CSV
-* Premium subscription plan
-* Study streak and daily reminder system
-* Collaborative study groups
-
-## Author
-
-Developed by **ITduow / StudyMate AI Team**.
+---

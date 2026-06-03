@@ -7,6 +7,7 @@ import React, { useState } from "react";
 import { UploadCloud, FileText, CheckCircle2, BookOpen, Star, HelpCircle, ArrowRight, ClipboardCopy } from "lucide-react";
 import { User } from "../types";
 import { isSupabaseConfigured } from "../lib/supabase";
+import Tesseract from "tesseract.js";
 
 interface HomeViewProps {
   currentUser: User | null;
@@ -15,6 +16,10 @@ interface HomeViewProps {
   onUploadTextDocument: (title: string, content: string, fileObj?: File) => Promise<any>;
   onSupabaseLogin?: (email: string, pass: string) => Promise<{ error?: string }>;
   onSupabaseSignUp?: (email: string, pass: string, name: string) => Promise<{ error?: string }>;
+  isResetPasswordMode?: boolean;
+  onResetPasswordRequest?: (email: string) => Promise<{ error?: string; success?: string }>;
+  onUpdatePassword?: (password: string) => Promise<{ error?: string; success?: string }>;
+  setIsResetPasswordMode?: (val: boolean) => void;
 }
 
 export function HomeView({
@@ -23,12 +28,21 @@ export function HomeView({
   onNavigate,
   onUploadTextDocument,
   onSupabaseLogin,
-  onSupabaseSignUp
+  onSupabaseSignUp,
+  isResetPasswordMode = false,
+  onResetPasswordRequest,
+  onUpdatePassword,
+  setIsResetPasswordMode
 }: HomeViewProps) {
   const [emailInput, setEmailInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
+  const [confirmPasswordInput, setConfirmPasswordInput] = useState("");
   const [fullNameInput, setFullNameInput] = useState("");
-  const [authMode, setAuthMode] = useState<"login" | "signup">("login");
+  
+  const [newPasswordInput, setNewPasswordInput] = useState("");
+  const [confirmNewPasswordInput, setConfirmNewPasswordInput] = useState("");
+
+  const [authMode, setAuthMode] = useState<"login" | "signup" | "forgot_password">("login");
   const [authMsg, setAuthMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [isAuthPending, setIsAuthPending] = useState(false);
 
@@ -44,6 +58,13 @@ export function HomeView({
   const [isUploading, setIsUploading] = useState(false);
   const [successMsg, setSuccessMsg] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Client-Side OCR States
+  const [pendingOcrFile, setPendingOcrFile] = useState<File | null>(null);
+  const [showOcrConfirm, setShowOcrConfirm] = useState(false);
+  const [ocrProgress, setOcrProgress] = useState<{ currentPage: number; totalPages: number; progressPercent: number; status: string } | null>(null);
+  const [ocrLanguage, setOcrLanguage] = useState<string>("eng+vie");
+  const [ocrWorkerActive, setOcrWorkerActive] = useState<any>(null);
 
   const DEMO_PRESETS = [
     {
@@ -71,11 +92,38 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
     if (!emailInput) return;
     setAuthMsg(null);
 
-    if (onSupabaseLogin && onSupabaseSignUp) {
-      if (!passwordInput || passwordInput.length < 6) {
-        setAuthMsg({ type: "error", text: "Password must be at least 6 characters." });
+    if (authMode === "forgot_password") {
+      if (!onResetPasswordRequest) {
+        setAuthMsg({ type: "error", text: "Password reset is not configured." });
         return;
       }
+      setIsAuthPending(true);
+      try {
+        const res = await onResetPasswordRequest(emailInput);
+        if (res?.error) {
+          setAuthMsg({ type: "error", text: res.error });
+        } else {
+          setAuthMsg({ type: "success", text: res?.success || "If an account exists for this email, a reset link has been sent." });
+        }
+      } catch (err: any) {
+        setAuthMsg({ type: "error", text: err.message || "Failed to submit reset request." });
+      } finally {
+        setIsAuthPending(false);
+      }
+      return;
+    }
+
+    if (onSupabaseLogin && onSupabaseSignUp) {
+      if (!passwordInput || passwordInput.length < 8) {
+        setAuthMsg({ type: "error", text: "Password must be at least 8 characters long." });
+        return;
+      }
+      
+      if (authMode === "signup" && passwordInput !== confirmPasswordInput) {
+        setAuthMsg({ type: "error", text: "Passwords do not match." });
+        return;
+      }
+
       setIsAuthPending(true);
       try {
         if (authMode === "login") {
@@ -95,13 +143,13 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
           if (res?.error) {
             setAuthMsg({ type: "error", text: res.error });
           } else {
-            setAuthMsg({ type: "success", text: isSupabaseConfigured ? "Sign up successful! Please check email or login now." : "Sign up successful! Logging you in..." });
-            if (!isSupabaseConfigured) {
-              // Automatically sign up logged them in local sandbox
-              setAuthMode("login");
-            } else {
-              setAuthMode("login");
-            }
+            setAuthMsg({
+              type: "success",
+              text: isSupabaseConfigured 
+                ? "Sign up successful! Please check your email to confirm registration." 
+                : "Sign up successful! Logging you in..."
+            });
+            setAuthMode("login");
           }
         }
       } catch (err: any) {
@@ -112,6 +160,46 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
     } else {
       // Sandbox fallback mode if callbacks are not set up somehow
       onLoginAsGuest(emailInput);
+    }
+  };
+
+  const handleUpdatePasswordSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthMsg(null);
+    if (!newPasswordInput || newPasswordInput.length < 8) {
+      setAuthMsg({ type: "error", text: "Your new password must be at least 8 characters long." });
+      return;
+    }
+    if (newPasswordInput !== confirmNewPasswordInput) {
+      setAuthMsg({ type: "error", text: "Confirmation password does not match." });
+      return;
+    }
+    if (!onUpdatePassword) {
+      setAuthMsg({ type: "error", text: "Password update triggers are not configured." });
+      return;
+    }
+
+    setIsAuthPending(true);
+    try {
+      const res = await onUpdatePassword(newPasswordInput);
+      if (res?.error) {
+        setAuthMsg({ type: "error", text: res.error });
+      } else {
+        setAuthMsg({ type: "success", text: res?.success || "Password updated successfully! Please sign in again." });
+        setNewPasswordInput("");
+        setConfirmNewPasswordInput("");
+        setTimeout(() => {
+          if (setIsResetPasswordMode) {
+            setIsResetPasswordMode(false);
+          }
+          setAuthMode("login");
+          setAuthMsg(null);
+        }, 3000);
+      }
+    } catch (err: any) {
+      setAuthMsg({ type: "error", text: err.message || "Failed to update password." });
+    } finally {
+      setIsAuthPending(false);
     }
   };
 
@@ -193,6 +281,152 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
     });
   };
 
+  const cancelOcr = async () => {
+    console.log("[OCR] Aborting scan and terminating active worker...");
+    if (ocrWorkerActive) {
+      try {
+        await ocrWorkerActive.terminate();
+      } catch (e) {
+        console.warn("[OCR] Error terminating worker on cancel:", e);
+      }
+    }
+    setOcrWorkerActive(null);
+    setOcrProgress(null);
+    setShowOcrConfirm(false);
+    setPendingOcrFile(null);
+    setIsUploading(false);
+  };
+
+  const runOcrOnPendingFile = async () => {
+    if (!pendingOcrFile) return;
+    setErrorMsg("");
+    setSuccessMsg("");
+    setIsUploading(true);
+    
+    let worker: any = null;
+    try {
+      // 1. Convert File to ArrayBuffer
+      const reader = new FileReader();
+      const arrBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+        reader.onload = (e) => resolve((e.target?.result as ArrayBuffer));
+        reader.onerror = () => reject(new Error("Failed to read PDF file binary data."));
+        reader.readAsArrayBuffer(pendingOcrFile);
+      });
+
+      const pdfjsLib = await loadPdfjs();
+      const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrBuffer) });
+      const pdf = await loadingTask.promise;
+
+      // Limit scanner pages to 10
+      const totalPages = Math.min(pdf.numPages, 10);
+      let combinedText = "";
+
+      // 2. Initialize Tesseract Worker with requested languages
+      setOcrProgress({
+        currentPage: 0,
+        totalPages,
+        progressPercent: 0,
+        status: `Starting scanner worker matching "${ocrLanguage}"...`
+      });
+
+      const createAndInitWorker = async (lang: string) => {
+        const w = await Tesseract.createWorker(lang, 1, {
+          logger: (m: any) => {
+            if (m && m.status === "recognizing text") {
+              setOcrProgress((prev) => {
+                if (!prev) return prev;
+                return {
+                  ...prev,
+                  progressPercent: Math.round(m.progress * 100),
+                  status: `Scanning printed text on page ${prev.currentPage}...`
+                };
+              });
+            }
+          }
+        });
+        return w;
+      };
+
+      try {
+        worker = await createAndInitWorker(ocrLanguage);
+      } catch (langErr) {
+        console.warn(`[OCR] Failed to load "${ocrLanguage}" dataset, falling back to "eng" gracefully...`, langErr);
+        worker = await createAndInitWorker("eng");
+      }
+
+      setOcrWorkerActive(worker);
+
+      // 3. Render and scan page by page
+      for (let i = 1; i <= totalPages; i++) {
+        setOcrProgress({
+          currentPage: i,
+          totalPages,
+          progressPercent: 0,
+          status: "Preparing page view canvas..."
+        });
+
+        const page = await pdf.getPage(i);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        if (!context) {
+          throw new Error("Unable to create HTML5 2D canvas context.");
+        }
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        await page.render({
+          canvasContext: context,
+          viewport: viewport
+        }).promise;
+
+        const { data: { text } } = await worker.recognize(canvas);
+        if (text && text.trim()) {
+          combinedText += `--- Page ${i} ---\n` + text + "\n";
+        }
+      }
+
+      // Check final text quality
+      if (!combinedText || combinedText.trim().length < 20) {
+        throw new Error("OCR could not read enough text from this PDF. Try a clearer scanned PDF or upload TXT.");
+      }
+
+      // 4. Complete upload of scanned PDF with OCR extracted text
+      setOcrProgress(null);
+      setOcrWorkerActive(null);
+      setShowOcrConfirm(false);
+      setPendingOcrFile(null);
+
+      await onUploadTextDocument(pendingOcrFile.name, combinedText.trim(), pendingOcrFile);
+      setSuccessMsg(`Document "${pendingOcrFile.name}" OCR processed and uploaded successfully!`);
+      setTimeout(() => {
+        onNavigate("dashboard");
+      }, 1500);
+
+    } catch (err: any) {
+      console.error("[OCR Failure]", err);
+      // Suppress alert state in case of manual cancellation deallocating workers
+      if (err.message && (err.message.includes("terminated") || err.message.includes("deallocated") || err.message.includes("Worker"))) {
+        console.log("[OCR] OCR process stopped cleanly.");
+        return;
+      }
+      setErrorMsg(err.message || "OCR could not read this scanned PDF. Try a clearer PDF or upload TXT.");
+      setOcrProgress(null);
+      setOcrWorkerActive(null);
+      setShowOcrConfirm(false);
+      setPendingOcrFile(null);
+    } finally {
+      setIsUploading(false);
+      if (worker) {
+        try {
+          await worker.terminate();
+        } catch (tErr) {
+          console.warn("[OCR] Error terminating worker in finally sequence:", tErr);
+        }
+      }
+    }
+  };
+
   const handleFileProcess = async (file: File) => {
     setIsUploading(true);
     setSuccessMsg("");
@@ -205,8 +439,14 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
       let text = "";
       if (file.name.toLowerCase().endsWith(".pdf")) {
         text = await extractPdfText(file);
-        if (!text || !text.trim()) {
-          throw new Error("Could not extract text from this PDF. Please try a text-based PDF or upload TXT.");
+        
+        // Trigger OCR fallback if extracted PDF text is missing or extremely short/scanned
+        if (!text || text.trim().length < 120) {
+          console.log(`[FileProcess] PDF text missing or extremely short (${text?.trim().length || 0} chars). Presenting OCR fallback prompt...`);
+          setPendingOcrFile(file);
+          setShowOcrConfirm(true);
+          setIsUploading(false);
+          return;
         }
       } else {
         // Standard .txt / .md behavior fallback
@@ -225,7 +465,12 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
       }, 1500);
     } catch (err: any) {
       console.error(err);
-      setErrorMsg(err.message || "Could not extract text from this PDF. Please try a text-based PDF or upload TXT.");
+      const msg = err.message || "";
+      if (msg.includes("infinite recursion") || msg.includes("policy")) {
+        setErrorMsg("Database recursion error detected! To resolve this, please sign in as an Administrator in this app, head to the 'Admin Area', and run the corrected 'recursion-free' PostgreSQL RLS script in your Supabase SQL editor.");
+      } else {
+        setErrorMsg(err.message || "Could not extract text from this PDF. Please try a text-based PDF or upload TXT.");
+      }
     } finally {
       setIsUploading(false);
     }
@@ -253,6 +498,7 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
     e.preventDefault();
     if (!customTitle || !customContent) return;
     setIsUploading(true);
+    setErrorMsg("");
     try {
       if (!currentUser) {
         onLoginAsGuest("student@studymate.ai");
@@ -265,8 +511,14 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
       setTimeout(() => {
         onNavigate("dashboard");
       }, 1500);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      const msg = err.message || "";
+      if (msg.includes("infinite recursion") || msg.includes("policy")) {
+        setErrorMsg("Database recursion error detected! To resolve this, please sign in as an Administrator in this app, head to the 'Admin Area', and run the corrected 'recursion-free' PostgreSQL RLS script in your Supabase SQL editor.");
+      } else {
+        setErrorMsg(err.message || "Failed uploading custom notes.");
+      }
     } finally {
       setIsUploading(false);
     }
@@ -344,12 +596,90 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
           <div className="absolute inset-0 bg-indigo-200/40 rounded-[32px] transform rotate-2 scale-98 -z-10 opacity-70 blur-md pointer-events-none" />
           
           <div className="glass-effect-card rounded-[28px] p-6 sm:p-8 space-y-6 relative overflow-hidden">
-            {!currentUser ? (
-              // Login Segment
+            {isResetPasswordMode ? (
+              // Reset Password Segment
               <div className="space-y-4">
                 <div className="flex justify-between items-center mb-1">
                   <h3 className="text-lg font-extrabold text-gray-900 tracking-tight">
-                    {isSupabaseConfigured ? "Supabase Account Gate" : "Access Instantly"}
+                    Reset Password
+                  </h3>
+                  <span className="text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border bg-indigo-50 text-indigo-700 border-indigo-200">
+                    🔄 Security Lock
+                  </span>
+                </div>
+
+                <p className="text-xs text-gray-500 leading-relaxed font-sans">
+                  Enter your new high-strength password below to safely restore access to your study materials.
+                </p>
+
+                {authMsg && (
+                  <div className={`p-3 text-xs rounded-xl border leading-relaxed ${
+                    authMsg.type === "error" 
+                      ? "bg-rose-50 border-rose-200 text-rose-800" 
+                      : "bg-emerald-50 border-emerald-200 text-emerald-800"
+                  }`}>
+                    {authMsg.text}
+                  </div>
+                )}
+
+                <form onSubmit={handleUpdatePasswordSubmit} className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 font-mono">New Password</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="At least 8 characters"
+                      className="w-full px-4 py-2 rounded-xl border border-gray-200 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none bg-white/60"
+                      value={newPasswordInput}
+                      onChange={(e) => setNewPasswordInput(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 font-mono">Confirm New Password</label>
+                    <input
+                      type="password"
+                      required
+                      placeholder="Repeat your password"
+                      className="w-full px-4 py-2 rounded-xl border border-gray-200 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none bg-white/60"
+                      value={confirmNewPasswordInput}
+                      onChange={(e) => setConfirmNewPasswordInput(e.target.value)}
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isAuthPending}
+                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold rounded-xl text-xs tracking-wide uppercase transition-all shadow-sm cursor-pointer mt-2"
+                  >
+                    {isAuthPending ? "Updating Password..." : "Update Password"}
+                  </button>
+                  
+                  <div className="text-center mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (setIsResetPasswordMode) setIsResetPasswordMode(false);
+                        setAuthMode("login");
+                        setAuthMsg(null);
+                      }}
+                      className="text-xs font-semibold text-blue-600 hover:underline cursor-pointer"
+                    >
+                      Back to Sign In
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : !currentUser ? (
+              // Login/Signup/Forgot Segment
+              <div className="space-y-4">
+                <div className="flex justify-between items-center mb-1">
+                  <h3 className="text-lg font-extrabold text-gray-900 tracking-tight">
+                    {authMode === "login" 
+                      ? "Welcome back" 
+                      : authMode === "signup" 
+                        ? "Create Account" 
+                        : "Reset your password"}
                   </h3>
                   <span className={`text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
                     isSupabaseConfigured 
@@ -360,38 +690,40 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
                   </span>
                 </div>
 
-                <p className="text-xs text-gray-500 leading-relaxed">
-                  {isSupabaseConfigured 
-                    ? "Create a permanent account or sign in to save study plans, documents, and progress to Supabase Cloud Storage."
-                    : "Create a local sandbox profile or sign in to save plans, notes, and study logs directly in this browser session."}
+                <p className="text-xs text-gray-500 leading-relaxed font-sans">
+                  {authMode === "forgot_password"
+                    ? "Enter your email address below and we'll send you a password reset link."
+                    : "Sign in to manage your documents, AI study materials, and progress."}
                 </p>
 
-                <div className="flex bg-slate-100 p-1 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("login");
-                      setAuthMsg(null);
-                    }}
-                    className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all ${
-                      authMode === "login" ? "bg-white text-slate-900 shadow-3xs" : "text-gray-400 hover:text-gray-700"
-                    }`}
-                  >
-                    Sign In
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode("signup");
-                      setAuthMsg(null);
-                    }}
-                    className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all ${
-                      authMode === "signup" ? "bg-white text-slate-900 shadow-3xs" : "text-gray-400 hover:text-gray-700"
-                    }`}
-                  >
-                    Sign Up
-                  </button>
-                </div>
+                {authMode !== "forgot_password" && (
+                  <div className="flex bg-slate-100 p-1 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("login");
+                        setAuthMsg(null);
+                      }}
+                      className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                        authMode === "login" ? "bg-white text-slate-900 shadow-3xs" : "text-gray-400 hover:text-gray-700"
+                      }`}
+                    >
+                      Sign In
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAuthMode("signup");
+                        setAuthMsg(null);
+                      }}
+                      className={`flex-1 text-center py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                        authMode === "signup" ? "bg-white text-slate-900 shadow-3xs" : "text-gray-400 hover:text-gray-700"
+                      }`}
+                    >
+                      Create Account
+                    </button>
+                  </div>
+                )}
 
                 {authMsg && (
                   <div className={`p-3 text-xs rounded-xl border leading-relaxed ${
@@ -419,7 +751,7 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
                   )}
 
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 font-mono">Your Student Email</label>
+                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 font-mono">Email address</label>
                     <input
                       type="email"
                       required
@@ -430,54 +762,87 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 font-mono">Security Password</label>
-                    <input
-                      type="password"
-                      required
-                      placeholder="••••••••"
-                      className="w-full px-4 py-2 rounded-xl border border-gray-200 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none bg-white/60"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                    />
-                  </div>
+                  {authMode !== "forgot_password" && (
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest font-mono">Password</label>
+                        {authMode === "login" && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAuthMode("forgot_password");
+                              setAuthMsg(null);
+                            }}
+                            className="text-[10px] text-blue-600 hover:underline font-semibold font-sans focus:outline-none cursor-pointer"
+                          >
+                            Forgot password?
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        className="w-full px-4 py-2 rounded-xl border border-gray-200 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none bg-white/60"
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                      />
+                    </div>
+                  )}
+
+                  {authMode === "signup" && (
+                    <div>
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 font-mono">Confirm password</label>
+                      <input
+                        type="password"
+                        required
+                        placeholder="••••••••"
+                        className="w-full px-4 py-2 rounded-xl border border-gray-200 text-xs focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none bg-white/60"
+                        value={confirmPasswordInput}
+                        onChange={(e) => setConfirmPasswordInput(e.target.value)}
+                      />
+                    </div>
+                  )}
 
                   <button
                     type="submit"
                     disabled={isAuthPending}
-                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold rounded-xl text-xs tracking-wide uppercase transition-colors shadow-sm cursor-pointer mt-2"
+                    className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold rounded-xl text-xs tracking-wide uppercase transition-all shadow-sm cursor-pointer mt-2"
                   >
                     {isAuthPending ? (
                       <span className="flex items-center justify-center gap-1.5">
-                        Authenticating...
+                        Processing...
                       </span>
+                    ) : authMode === "forgot_password" ? (
+                      "Send reset link"
+                    ) : authMode === "login" ? (
+                      "Sign In"
                     ) : (
-                      isSupabaseConfigured
-                        ? (authMode === "login" ? "Confirm and sign in" : "Register new account")
-                        : (authMode === "login" ? "Launch Sandbox Session" : "Create Sandbox Account")
+                      "Sign Up"
                     )}
                   </button>
+
+                  {authMode === "forgot_password" && (
+                    <div className="text-center mt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAuthMode("login");
+                          setAuthMsg(null);
+                        }}
+                        className="text-xs font-semibold text-blue-600 hover:underline focus:outline-none cursor-pointer"
+                      >
+                        Back to Sign In
+                      </button>
+                    </div>
+                  )}
                 </form>
 
-                <div className="relative flex items-center justify-center my-3.5">
-                  <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-100" /></div>
-                  <span className="relative bg-[#fdfcfb] px-3 text-[9px] uppercase font-bold tracking-wider text-gray-400 font-mono">Sandbox Demo Presets</span>
-                </div>
+                <p className="text-[10px] text-gray-400 text-center leading-normal pt-1.5 font-sans border-t border-slate-100/50">
+                  🛡️ Your documents and progress are securely stored in your account.
+                </p>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => onLoginAsGuest("student@studymate.ai")}
-                    className="py-2 bg-blue-50/70 hover:bg-blue-100/70 text-blue-700 rounded-lg text-xs font-bold transition-all border border-blue-100/30 text-center cursor-pointer"
-                  >
-                    Login as Student
-                  </button>
-                  <button
-                    onClick={() => onLoginAsGuest("admin@studymate.ai")}
-                    className="py-2 bg-amber-50/70 hover:bg-amber-100/70 text-amber-700 rounded-lg text-xs font-bold transition-all border border-amber-100/30 text-center cursor-pointer"
-                  >
-                    Login as Admin
-                  </button>
-                </div>
+
               </div>
             ) : (
               // Upload Widget Segment (When signed in)
@@ -568,9 +933,9 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
               </div>
 
                 <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 flex items-start gap-2.5">
-                  <HelpCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div className="text-[10px] text-blue-800 leading-tight">
-                    <strong>Demo Note:</strong> Currently signed in as <span className="font-bold underline">{currentUser.email}</span>. Click "Browse Files" or type in "Paste Notes" above to inject new lessons in moments!
+                  <HelpCircle className="h-4 w-4 text-blue-650 mt-0.5 flex-shrink-0" />
+                  <div className="text-[10px] text-blue-850 leading-tight">
+                    <strong>Guided Note:</strong> Signed in successfully as <span className="font-bold underline">{currentUser.email}</span>. Click "Browse Files" or switch to "Paste Notes" to synthesize custom syllabus tracks instantly.
                   </div>
                 </div>
               </div>
@@ -641,10 +1006,124 @@ One primary bottleneck in contemporary AI engineering is training resources, as 
             <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end">
               <button
                 onClick={() => setShowDemoSelector(false)}
-                className="py-1.5 px-3.5 text-xs font-semibold text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+                className="py-1.5 px-3.5 text-xs font-semibold text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors font-sans"
                 id="close-demo-selector"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OCR Confirmation Overlay */}
+      {showOcrConfirm && pendingOcrFile && (
+        <div className="fixed inset-0 z-50 bg-slate-900/35 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-white/70 backdrop-blur-2xl rounded-3xl shadow-2xl max-w-md w-full p-6 border border-white/60 overflow-hidden relative">
+            <div className="absolute top-0 right-0 h-1.5 bg-gradient-to-r from-amber-500 to-orange-600 w-full" />
+            
+            <h3 className="text-lg font-extrabold text-slate-900 mb-1 flex items-center gap-2">
+              <Star className="h-5 w-5 text-amber-500 animate-pulse" />
+              Scanned PDF Detected
+            </h3>
+            <p className="text-slate-600 text-xs mb-4 leading-relaxed font-sans">
+              The PDF <strong>"{pendingOcrFile.name}"</strong> appears to be scanned or image-only (no extractable text). Would you like to run client-side OCR (Optical Character Recognition) to extract the study text?
+            </p>
+            
+            <div className="bg-amber-50/50 border border-amber-200/50 rounded-xl p-3 mb-4 space-y-1">
+              <h4 className="text-[10px] font-bold text-amber-800 uppercase tracking-wide font-sans">OCR Limits & Performance Policy</h4>
+              <p className="text-[10px] text-amber-700/90 leading-normal font-sans">
+                OCR runs entirely inside your browser engine. For performance and memory safety, we scan up to the <strong>first 10 pages</strong>. Scanned PDFs can take a while to complete.
+              </p>
+            </div>
+
+            {/* Language Selector */}
+            <div className="mb-6">
+              <label className="block text-[10px] font-bold text-gray-550 uppercase mb-1.5 tracking-wide font-sans">
+                Recognition Language
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOcrLanguage("eng+vie")}
+                  className={`py-2 px-3 text-xs font-bold rounded-lg border text-center transition-all cursor-pointer ${
+                    ocrLanguage === "eng+vie"
+                      ? "bg-blue-50 border-blue-200 text-blue-700 font-extrabold font-mono"
+                      : "bg-white/50 border-gray-150 text-gray-500 hover:bg-slate-50 font-mono"
+                  }`}
+                >
+                  English + Vietnamese
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOcrLanguage("eng")}
+                  className={`py-2 px-3 text-xs font-bold rounded-lg border text-center transition-all cursor-pointer ${
+                    ocrLanguage === "eng"
+                      ? "bg-blue-50 border-blue-200 text-blue-700 font-extrabold font-mono"
+                      : "bg-white/50 border-gray-150 text-gray-500 hover:bg-slate-50 font-mono"
+                  }`}
+                >
+                  English Only
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2.5">
+              <button
+                onClick={cancelOcr}
+                className="py-1.5 px-4 text-xs font-bold text-gray-500 hover:text-gray-700 hover:bg-gray-150 rounded-xl transition-colors cursor-pointer font-sans"
+                id="ocr-cancel-button"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={runOcrOnPendingFile}
+                className="py-1.5 px-4 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition-colors shadow-sm cursor-pointer font-sans"
+                id="ocr-confirm-button"
+              >
+                Run Character Scanner
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* OCR Active Progress Overlay */}
+      {ocrProgress && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white/85 backdrop-blur-2xl rounded-3xl shadow-xl max-w-sm w-full p-6 border border-white/80 overflow-hidden text-center space-y-4">
+            <div className="animate-spin h-8 w-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto" />
+            
+            <div className="space-y-1">
+              <h3 className="text-sm font-black text-slate-900 font-sans">
+                OCR Scanning • Page {ocrProgress.currentPage} of {ocrProgress.totalPages}
+              </h3>
+              <p className="text-[11px] text-gray-550 font-medium font-sans">
+                {ocrProgress.status}
+              </p>
+            </div>
+
+            {/* Progress Bar container */}
+            <div className="space-y-1">
+              <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-blue-600 h-full transition-all duration-300"
+                  style={{ width: `${ocrProgress.progressPercent}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[9px] font-mono text-gray-400">
+                <span>Page progress</span>
+                <span>{ocrProgress.progressPercent}%</span>
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-gray-100">
+              <button
+                onClick={cancelOcr}
+                className="py-1.5 px-4 text-xs font-bold text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl transition-colors cursor-pointer font-sans"
+                id="ocr-abort-scan-button"
+              >
+                Cancel and Stop Scanner
               </button>
             </div>
           </div>

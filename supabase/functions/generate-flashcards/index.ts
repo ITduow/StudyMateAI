@@ -16,33 +16,33 @@ Deno.serve(async (req) => {
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const supabaseServiceKey = Deno.env.get("SERVICE_ROLE_KEY") ?? "";
     const geminiApiKey = Deno.env.get("GEMINI_API_KEY") ?? "";
-    const baseModel = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
-
-    // Setup model list to fallback gracefully if the primary model is unavailable or overloaded
-    const modelsToTry = [
-      baseModel,
-      baseModel === "gemini-3.5-flash" ? "gemini-3.1-flash-lite" : "gemini-3.5-flash",
-      "gemini-flash-latest"
-    ].filter((v, i, a) => a.indexOf(v) === i);
+    const modelsToTry = Array.from(new Set([
+      Deno.env.get("GEMINI_MODEL"),
+      "gemini-2.5-flash",
+      "gemini-3.5-flash",
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite"
+    ].filter(Boolean)));
 
     console.log("[generate-flashcards:env] Validating environment variables...");
+    console.log(`[generate-flashcards:gemini-config] Primary model: ${Deno.env.get("GEMINI_MODEL")}. Configured models pool for trials: ${JSON.stringify(modelsToTry)}`);
     if (!supabaseUrl) {
       console.error("[generate-flashcards:env-error] SUPABASE_URL environment variable is missing.");
     }
     if (!supabaseServiceKey) {
-      console.error("[generate-flashcards:env-error] SUPABASE_SERVICE_ROLE_KEY environment variable is missing.");
+      console.error("[generate-flashcards:env-error] SERVICE_ROLE_KEY / SUPABASE_SERVICE_ROLE_KEY environment variable is missing.");
     }
     if (!geminiApiKey) {
       console.error("[generate-flashcards:env-error] GEMINI_API_KEY environment variable is missing.");
     }
-    console.log(`[generate-flashcards:gemini-config] Using primary model: ${baseModel}. Models pool for fallbacks: ${modelsToTry.join(", ")}`);
+    console.log(`[generate-flashcards:gemini-config] Models pool for fallbacks: ${modelsToTry.join(", ")}`);
 
     if (!supabaseUrl || !supabaseServiceKey) {
       return new Response(JSON.stringify({ 
         error: "Missing Supabase configuration env variables.",
-        details: "Ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are configured in Supabase Edge Secrets."
+        details: "Ensure SUPABASE_URL and SERVICE_ROLE_KEY are configured in Supabase Edge Secrets."
       }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -145,6 +145,93 @@ Deno.serve(async (req) => {
     }
     console.log(`[generate-flashcards:db-success] Found document "${doc.title}" for user.`);
 
+    // --- AI LIMITS CHECK ---
+    const action = "generate-flashcards";
+    const freeLimit = 5;
+    const premiumLimit = 100;
+    let isPremium = false;
+
+    try {
+      console.log(`[generate-flashcards:limit-check] Fetching user profile for limit check...`);
+      const { data: profile, error: profileErr } = await adminClient
+        .from("profiles")
+        .select("is_premium")
+        .eq("id", user.id)
+        .single();
+
+      if (profileErr || !profile) {
+        console.error(`[generate-flashcards:limit-check-error] Profile fetch error:`, profileErr);
+        return new Response(JSON.stringify({ 
+          error: "Unable to verify AI usage limit",
+          details: "Please try again later."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      isPremium = !!profile.is_premium;
+      console.log(`[generate-flashcards:limit-check] User profile found. isPremium: ${isPremium}`);
+
+      // Count today's rows from public.ai_usage_logs
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const todayStartISO = todayStart.toISOString();
+
+      const { data: logs, error: logsErr } = await adminClient
+        .from("ai_usage_logs")
+        .select("id")
+        .eq("user_id", user.id)
+        .eq("action", action)
+        .gte("created_at", todayStartISO);
+
+      if (logsErr) {
+        console.error(`[generate-flashcards:limit-check-error] Logs count fetch error:`, logsErr);
+        return new Response(JSON.stringify({ 
+          error: "Unable to verify AI usage limit",
+          details: "Please try again later."
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const todayUsage = logs?.length || 0;
+      const limit = isPremium ? premiumLimit : freeLimit;
+      console.log(`[generate-flashcards:limit-check] Usage today: ${todayUsage}/${limit}`);
+
+      // Add detailed console logs as requested
+      console.log(`AI LIMITS CHECK RESPONSE FOR ${action}:`);
+      console.log(`- action: ${action}`);
+      console.log(`- is_premium: ${isPremium}`);
+      console.log(`- today usage count: ${todayUsage}`);
+      console.log(`- daily limit: ${limit}`);
+
+      if (todayUsage >= limit) {
+        console.log(`- blocked or allowed: blocked`);
+        console.warn(`[generate-flashcards:limit] Daily AI limit reached. todayUsage: ${todayUsage}, limit: ${limit}`);
+        return new Response(JSON.stringify({ 
+          error: "Daily AI limit reached",
+          details: "Upgrade to Premium to continue."
+        }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      console.log(`- blocked or allowed: allowed`);
+    } catch (checkErr: any) {
+      console.error(`[generate-flashcards:limit-check-fatal] Fatal error during limit check:`, checkErr);
+      return new Response(JSON.stringify({ 
+        error: "Unable to verify AI usage limit",
+        details: "Please try again later."
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // --- END AI LIMITS CHECK ---
+
     const extractedText = doc.extracted_text || "";
     console.log(`[generate-flashcards:extractedText] Document source text length: ${extractedText.length} characters`);
     if (!extractedText.trim()) {
@@ -184,15 +271,13 @@ Requirements:
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     let response = null;
-    let attempts = 0;
-    const maxAttempts = 4;
-    const baseDelayMs = 1500;
+    let successModel = "";
     let errText = "";
 
-    while (attempts < maxAttempts) {
-      attempts++;
-      const currentModel = modelsToTry[Math.min(attempts - 1, modelsToTry.length - 1)];
-      console.log(`[generate-flashcards:gemini] Attempt ${attempts} of ${maxAttempts} using model: ${currentModel}...`);
+    for (let attempts = 0; attempts < modelsToTry.length; attempts++) {
+      const rawModel = modelsToTry[attempts];
+      const currentModel = rawModel.startsWith("models/") ? rawModel.substring(7) : rawModel;
+      console.log(`[generate-flashcards:gemini] Attempt ${attempts + 1} of ${modelsToTry.length} trying model: "${currentModel}"`);
       try {
         response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${geminiApiKey}`,
@@ -214,49 +299,37 @@ Requirements:
           }
         );
 
-        console.log(`[generate-flashcards:gemini-response] API Response Status Code on attempt ${attempts} (Model: ${currentModel}): ${response.status}`);
-        
+        console.log(`[generate-flashcards:gemini-response] Model "${currentModel}" status: ${response.status}`);
         if (response.ok) {
-          break; // Successful request, break the retry loop
+          successModel = currentModel;
+          console.log(`[generate-flashcards:gemini-success] Final success model: "${successModel}"`);
+          break;
         }
 
         errText = await response.text();
-        console.warn(`[generate-flashcards:gemini-attempt-warn] Attempt ${attempts} returned error payload:`, errText);
-
-        // Check for 503, 429, or other transient indicator keywords in body/code
-        const isTransient = response.status === 503 ||
-                            response.status === 429 ||
-                            errText.includes("503") ||
-                            errText.includes("UNAVAILABLE") ||
-                            errText.includes("high demand") ||
-                            errText.includes("RESOURCE_EXHAUSTED");
-
-        if (isTransient && attempts < maxAttempts) {
-          // Calculate exponential delay with randomized jitter
-          const sleepTime = baseDelayMs * Math.pow(2, attempts - 1) + Math.random() * 500;
-          console.log(`[generate-flashcards:gemini-retry] Transient error found (${response.status}). Retrying alternative model in ${Math.round(sleepTime)}ms...`);
-          await delay(sleepTime);
-        } else {
-          break; // No retry for standard non-transient errors or maximum attempts exceeded
+        console.warn(`[generate-flashcards:gemini-warn] Model "${currentModel}" failed. Status ${response.status}. Details: ${errText}`);
+        
+        if (attempts + 1 < modelsToTry.length) {
+          const nextModel = modelsToTry[attempts + 1];
+          console.log(`[generate-flashcards:gemini-fallback] Fallback model selected: "${nextModel}"`);
+          await delay(500);
         }
       } catch (fetchErr: any) {
-        console.error(`[generate-flashcards:gemini-fetch-error] Fetch exception during attempt ${attempts}:`, fetchErr);
         errText = fetchErr?.message || String(fetchErr);
-        if (attempts < maxAttempts) {
-          const sleepTime = baseDelayMs * Math.pow(2, attempts - 1);
-          console.log(`[generate-flashcards:gemini-retry] Exception caught. Retrying alternative model in ${Math.round(sleepTime)}ms...`);
-          await delay(sleepTime);
-        } else {
-          break;
+        console.error(`[generate-flashcards:gemini-error] Exception trying model "${currentModel}":`, fetchErr);
+        if (attempts + 1 < modelsToTry.length) {
+          const nextModel = modelsToTry[attempts + 1];
+          console.log(`[generate-flashcards:gemini-fallback] Fallback model selected: "${nextModel}"`);
+          await delay(500);
         }
       }
     }
 
     if (!response || !response.ok) {
-      console.error("[generate-flashcards:gemini-fatal] Gemini API failed after multiple retries:", errText);
+      console.error("[generate-flashcards:gemini-error] All configured models failed. Returning bad response.");
       return new Response(JSON.stringify({ 
-        error: "Gemini API call failed",
-        details: errText || "The model is currently experiencing high demand or authentication was refused. Please try again."
+        error: "Gemini API request failed",
+        details: "All configured Gemini models failed or exceeded quota. Please try again later."
       }), {
         status: 502,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -347,6 +420,28 @@ Requirements:
     }
 
     console.log(`[generate-flashcards:db-save-success] Successfully inserted ${validatedCards.length} flashcards for Document ID: ${documentId}`);
+
+    // Log the AI usage securely
+    console.log("[usage-log] inserting", action, user.id, documentId);
+    const { error: logInsertErr } = await adminClient.from("ai_usage_logs").insert({
+      user_id: user.id,
+      document_id: documentId,
+      action: action
+    });
+
+    if (logInsertErr) {
+      console.error("[usage-log] insert failed", logInsertErr);
+      return new Response(JSON.stringify({ 
+        error: "Failed to record AI usage",
+        details: logInsertErr.message || "An error occurred while inserting the usage log."
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log("[usage-log] insert success");
+
     return new Response(JSON.stringify(insertedData), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },

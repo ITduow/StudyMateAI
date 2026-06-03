@@ -12,12 +12,27 @@ import { QuizView } from "./components/QuizView";
 import { FlashcardView } from "./components/FlashcardView";
 import { AdminView } from "./components/AdminView";
 import { User, Document, Summary, Quiz, Flashcard, StudyPlan, UserProgress } from "./types";
-import { AlertCircle, Loader } from "lucide-react";
+import { AlertCircle, Loader, CheckCircle2, Sparkles } from "lucide-react";
 import { supabase, isSupabaseConfigured } from "./lib/supabase";
+
+/**
+ * DEVELOPER NOTE — SUPABASE AUTHENTICATION URL CONFIGURATION:
+ * -------------------------------------------------------------
+ * To ensure the Forget / Reset password flow redirects to the proper
+ * web screens, you MUST configure the following in your Supabase Dashboard:
+ * 
+ * 1. Site URL:
+ *    - production Vercel URL (e.g., https://your-domain.vercel.app)
+ * 
+ * 2. Redirect URLs (Additional Redirect URLs):
+ *    - https://your-domain.vercel.app/*
+ *    - http://localhost:5173/*  (for local development routing)
+ */
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [currentView, setCurrentView] = useState<string>("home");
+  const [isResetPasswordMode, setIsResetPasswordMode] = useState(false);
   
   // Data State
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -44,11 +59,115 @@ export default function App() {
 
   // Global Loaders
   const [isBooting, setIsBooting] = useState(true);
-  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<React.ReactNode | null>(null);
+  const [successBanner, setSuccessBanner] = useState<string | null>(null);
+
+  // Handle payOS payment success/cancel query triggers and account password recovery checks
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paymentStatus = params.get("payment");
+    const isRecoveryUrl = params.get("auth") === "reset-password" || window.location.hash.includes("type=recovery");
+
+    if (isRecoveryUrl) {
+      console.log("[RecoveryDetect:Effect] Redirected from account security link. Initializing reset state.");
+      setIsResetPasswordMode(true);
+      setCurrentView("home");
+      
+      // Delay replacing state so Supabase has ample time to parse the hash/query parameters!
+      const clearTimer = setTimeout(() => {
+        try {
+          const urlStr = window.location.pathname;
+          window.history.replaceState({}, document.title, urlStr);
+        } catch (err) {
+          console.warn("[App:HistoryState] Failed clean recovery url parameters:", err);
+        }
+      }, 3500);
+      return () => clearTimeout(clearTimer);
+    }
+
+    if (paymentStatus === "success") {
+      setSuccessBanner("Payment submitted. Premium will activate after bank confirmation.");
+      
+      // Clean query parameters from URL
+      try {
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, newUrl);
+      } catch (historyErr) {
+        console.warn("[App:HistoryState] Failed to rewrite search clean:", historyErr);
+      }
+
+      // Wait 3 seconds, then refetch current profile from Supabase
+      const timer = setTimeout(async () => {
+        if (isSupabaseConfigured && supabase) {
+          try {
+            console.log("[payOS SUCCESS Refetch] Auto-polling user profile status 3s after successful checkout redirect...");
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session && session.user) {
+              const { data: profile, error } = await supabase
+                .from("profiles")
+                .select("*")
+                .eq("id", session.user.id)
+                .single();
+              
+              if (!error && profile) {
+                console.log("[payOS SUCCESS Refetch] Fetched profile:", profile);
+                if (profile.is_premium) {
+                  // premium active! Sync locally to update badge
+                  setCurrentUser(prevUser => {
+                    if (!prevUser) return null;
+                    return {
+                      ...prevUser,
+                      subscription: "premium"
+                    };
+                  });
+                  setSuccessBanner("Premium activated successfully!");
+                  // Reload active user workspace data like limits
+                  await loadSupabaseWorkspaceData(session.user.id, {
+                    id: session.user.id,
+                    email: session.user.email || "",
+                    name: profile.full_name || "Student",
+                    role: (profile.role || "student") as "student" | "admin",
+                    subscription: "premium",
+                    createdAt: profile.created_at || new Date().toISOString()
+                  });
+                } else {
+                  console.log("[payOS SUCCESS Refetch] profile.is_premium is still false. Waiting for bank webhook callback.");
+                }
+              } else if (error) {
+                console.warn("[payOS SUCCESS Refetch] Error fetching profile:", error);
+              }
+            }
+          } catch (refetchErr) {
+            console.error("[payOS SUCCESS Refetch] Failed to perform profile refetch:", refetchErr);
+          }
+        }
+      }, 3000);
+
+      return () => clearTimeout(timer);
+    } else if (paymentStatus === "cancel") {
+      setErrorBanner("Payment was cancelled.");
+      
+      // Clean query parameters from URL
+      try {
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, newUrl);
+      } catch (historyErr) {
+        console.warn("[App:HistoryState] Failed to rewrite search clean on cancel:", historyErr);
+      }
+    }
+  }, [currentUser]);
 
   // Authenticate on startup
   useEffect(() => {
     if (isSupabaseConfigured && supabase) {
+      // Check query parameter on startup
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("auth") === "reset-password" || window.location.hash.includes("type=recovery")) {
+        console.log("[Startup] Redirected for password reset. Setting recovery mode.");
+        setIsResetPasswordMode(true);
+        setCurrentView("home");
+      }
+
       // Get initial session
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (session) {
@@ -60,7 +179,11 @@ export default function App() {
 
       // Listen for auth changes
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === "SIGNED_IN" && session) {
+        if (event === "PASSWORD_RECOVERY") {
+          console.log("[AuthListener]PASSWORD_RECOVERY triggered.");
+          setIsResetPasswordMode(true);
+          setCurrentView("home");
+        } else if (event === "SIGNED_IN" && session) {
           bootstrapSupabaseSession(session);
         } else if (event === "SIGNED_OUT") {
           handleLogoutCleanup();
@@ -153,7 +276,15 @@ export default function App() {
         await loadSupabaseWorkspaceData(authUser.id, mapped);
       }
 
-      if (currentView === "home") {
+      const isRecovery = window.location.search.includes("auth=reset-password") || 
+                         window.location.hash.includes("type=recovery") || 
+                         isResetPasswordMode;
+
+      if (isRecovery) {
+        console.log("[bootstrapSupabaseSession] Recovery flow detected. Restricting auto-redirect to dashboard to keep password reset visible.");
+        setIsResetPasswordMode(true);
+        setCurrentView("home");
+      } else if (currentView === "home") {
         setCurrentView("dashboard");
       }
     } catch (err) {
@@ -321,6 +452,20 @@ export default function App() {
         console.warn("Could not load user_progress logs from Supabase:", progEx);
       }
 
+      // 4b. Fetch actual AI usage counts directly from ai_usage_logs
+      let totalAIUsageCount = 0;
+      try {
+        const { data: aiLogsRows, error: aiLogsErr } = await supabase
+          .from("ai_usage_logs")
+          .select("id")
+          .eq("user_id", userId);
+        if (!aiLogsErr && aiLogsRows) {
+          totalAIUsageCount = aiLogsRows.length;
+        }
+      } catch (aiLogsEx) {
+        console.warn("Could not load actual ai_usage_logs for progress tracking:", aiLogsEx);
+      }
+
       const avgMasteryRate = flashcardSessionsCount > 0 
         ? Math.round(totalMasteryRateSum / flashcardSessionsCount)
         : 0;
@@ -330,7 +475,7 @@ export default function App() {
         userId,
         quizzes: progressList,
         flashcardProgress,
-        totalAIUsage: progressList.length, // approximation based on session activity logs
+        totalAIUsage: totalAIUsageCount, // Real counted generator usages!
         lastActive: progressList.length > 0 ? progressList[0].date : new Date().toISOString(),
         // Extra properties for dashboard mapping
         flashcardSessionsCount,
@@ -473,6 +618,49 @@ export default function App() {
     }
   };
 
+  const handleResetPasswordRequest = async (email: string): Promise<{ error?: string; success?: string }> => {
+    if (!isSupabaseConfigured || !supabase) {
+      return { success: "In sandbox mode: password reset request simulated successfully." };
+    }
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/?auth=reset-password`
+      });
+      if (error) return { error: error.message };
+      return { success: "Password reset instructions have been dispatched. Check your email inbox." };
+    } catch (err: any) {
+      return { error: err.message || "Password recovery request failed." };
+    }
+  };
+
+  const handleUpdatePassword = async (password: string): Promise<{ error?: string; success?: string }> => {
+    if (!isSupabaseConfigured || !supabase) {
+      try {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } catch (e) {
+        console.warn(e);
+      }
+      return { success: "Sandbox password override updated successfully." };
+    }
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) return { error: error.message };
+      
+      // Clear URL query/hash so refreshes do not reload the recovery screen
+      try {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      } catch (historyErr) {
+        console.warn("[App:HistoryState] Failed clean recovery url parameters:", historyErr);
+      }
+
+      // Force signout to clear state and re-authenticate securely
+      await supabase.auth.signOut();
+      return { success: "Password updated successfully. Please sign in again." };
+    } catch (err: any) {
+      return { error: err.message || "Could not update account credentials. Try again." };
+    }
+  };
+
   const handleLogoutCleanup = () => {
     setCurrentUser(null);
     setDocuments([]);
@@ -500,6 +688,11 @@ export default function App() {
   const handleSelectRole = async (role: "student" | "admin") => {
     if (!currentUser) return;
 
+    if (currentUser.role !== "admin") {
+      setErrorBanner("Access denied: Only administrators can modify profile roles.");
+      return;
+    }
+
     if (isSupabaseConfigured && supabase) {
       try {
         const { error } = await supabase
@@ -514,9 +707,11 @@ export default function App() {
           await loadSupabaseWorkspaceData(currentUser.id, updated);
         } else {
           console.error("Failed setting role to profiles table:", error);
+          setErrorBanner("Access denied: Supabase prevented your role update.");
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
+        setErrorBanner("Access denied: " + err.message);
       }
     } else {
       try {
@@ -530,21 +725,274 @@ export default function App() {
           setCurrentUser(updated);
           setCurrentView(role === "admin" ? "admin" : "dashboard");
           await loadWorkspaceData(currentUser.id, updated);
+        } else {
+          setErrorBanner("Access denied: Server rejected the simulation role update.");
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
+        setErrorBanner("Access denied: Failed to contact the backend server.");
       }
     }
   };
 
-  const handleUpgradeTier = async (tier: "free" | "premium") => {
+  const handleUpgradePremiumDemo = async () => {
     if (!currentUser) return;
+    setErrorBanner(null);
+    setSuccessBanner(null);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+        
+        if (sessionErr || !session) {
+          setErrorBanner("No active session. Please log in again.");
+          return;
+        }
+
+        console.log("[handleUpgradePremiumDemo] Invoking upgrade-premium Edge Function...");
+        const { data, error } = await supabase.functions.invoke("upgrade-premium", {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`
+          }
+        });
+
+        if (error) {
+          console.error("[handleUpgradePremiumDemo:execute-error] upgrade-premium function failed:", error);
+          let detailMsg = error.message;
+          try {
+            const ctxResponse = (error as any).context;
+            const clonedResponse = typeof ctxResponse?.clone === "function" ? ctxResponse.clone() : ctxResponse;
+            const errorPayload = await clonedResponse.json();
+            if (errorPayload && errorPayload.error) {
+              detailMsg = errorPayload.error + (errorPayload.details ? ` (${errorPayload.details})` : "");
+            }
+          } catch (e) {
+            // Context parsing was not JSON
+          }
+          throw new Error(detailMsg);
+        }
+
+        console.log("[handleUpgradePremiumDemo:success] Completed edge update:", data);
+        
+        // Re-fetch current profile from public.profiles by auth user id
+        console.log("[handleUpgradePremiumDemo] Re-fetching current profile from public.profiles table...");
+        const { data: fetchedProfile, error: profileFetchErr } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", currentUser.id)
+          .single();
+
+        if (profileFetchErr) {
+          console.warn("[handleUpgradePremiumDemo] Re-fetch profile from public.profiles returned error:", profileFetchErr);
+        }
+
+        const finalProfile = fetchedProfile || data?.profile;
+        const isPremiumActive = finalProfile?.is_premium ?? true;
+
+        // Sync state back to client interface immediately
+        const updatedUser: User = { 
+          ...currentUser, 
+          subscription: isPremiumActive ? "premium" : "free",
+          name: finalProfile?.full_name || currentUser.name,
+          role: (finalProfile?.role || currentUser.role) as "student" | "admin"
+        };
+        console.log("[handleUpgradePremiumDemo] Applying updatedUser client state:", updatedUser);
+        setCurrentUser(updatedUser);
+        await loadSupabaseWorkspaceData(currentUser.id, updatedUser);
+        setSuccessBanner("Premium activated for demo.");
+      } catch (err: any) {
+        console.warn("[handleUpgradePremiumDemo:supabase-failure] Supabase Edge Function premium upgrade failed. Using backup local express route...", err);
+        
+        try {
+          const res = await fetch("/api/users/upgrade-premium", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": currentUser.id
+            }
+          });
+          
+          if (!res.ok) {
+            const fallbackBody = await res.json().catch(() => ({}));
+            throw new Error(fallbackBody.error || "Server rejected local simulation tier upgrade.");
+          }
+
+          // Re-fetch profiles in case local update had some side-effects
+          const { data: fetchedProfile } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", currentUser.id)
+            .single();
+
+          const isPremiumActive = fetchedProfile ? fetchedProfile.is_premium : true;
+
+          const updatedUser: User = { 
+            ...currentUser, 
+            subscription: isPremiumActive ? "premium" : "free",
+            name: fetchedProfile?.full_name || currentUser.name,
+            role: (fetchedProfile?.role || currentUser.role) as "student" | "admin"
+          };
+          setCurrentUser(updatedUser);
+          await loadSupabaseWorkspaceData(currentUser.id, updatedUser);
+          setSuccessBanner("Premium activated for demo.");
+        } catch (fallbackErr: any) {
+          console.error("[handleUpgradePremiumDemo:fatal] Both primary edge client AND local backup routes failed:", fallbackErr);
+          setErrorBanner("Failed to upgrade account: " + err.message);
+        }
+      }
+    } else {
+      // Local Database mock operation
+      try {
+        const res = await fetch("/api/users/upgrade-premium", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": currentUser.id
+          }
+        });
+        
+        if (!res.ok) {
+          const fallbackBody = await res.json().catch(() => ({}));
+          throw new Error(fallbackBody.error || "Server rejected premium upgrade.");
+        }
+
+        const updatedUser = { ...currentUser, subscription: "premium" };
+        setCurrentUser(updatedUser);
+        await loadWorkspaceData(currentUser.id, updatedUser);
+        setSuccessBanner("Premium activated for demo.");
+      } catch (err: any) {
+        console.error("[handleUpgradePremiumDemo:local-error] Failed sandbox server update:", err);
+        setErrorBanner("Failed to upgrade account: " + err.message);
+      }
+    }
+  };
+
+  const handleUpgradePayos = async () => {
+    if (!currentUser) return;
+    setErrorBanner(null);
+    setSuccessBanner(null);
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        setSuccessBanner("Creating your VietQR / Bank Transfer payment checkout...");
+        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+        
+        if (sessionErr || !session) {
+          setErrorBanner("No active session. Please log in again.");
+          return;
+        }
+
+        console.log("[payOS] Invoking create-payos-payment Edge Function...");
+        const siteUrl = window.location.origin;
+        const returnUrl = `${siteUrl}/?payment=success`;
+        const cancelUrl = `${siteUrl}/?payment=cancel`;
+
+        const { data, error } = await supabase.functions.invoke("create-payos-payment", {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`
+          },
+          body: {
+            site_url: siteUrl,
+            siteUrl: siteUrl,
+            origin: siteUrl,
+            returnUrl: returnUrl,
+            return_url: returnUrl,
+            cancelUrl: cancelUrl,
+            cancel_url: cancelUrl
+          }
+        });
+
+        if (error) {
+          console.error("[payOS:execute-error] create-payos-payment function failed:", error);
+          let detailMsg = error.message;
+          try {
+            const ctxResponse = (error as any).context;
+            if (ctxResponse) {
+              const clonedResponse = typeof ctxResponse.clone === "function" ? ctxResponse.clone() : ctxResponse;
+              const errorText = await clonedResponse.text();
+              console.log("[payOS:execute-error] raw error context content:", errorText);
+              try {
+                const errorPayload = JSON.parse(errorText);
+                if (errorPayload && errorPayload.error) {
+                  detailMsg = errorPayload.error + (errorPayload.details ? ` (${errorPayload.details})` : "");
+                }
+              } catch {
+                if (errorText) {
+                  detailMsg = errorText;
+                }
+              }
+            }
+          } catch (e) {
+            // Context parsing was not JSON
+          }
+          throw new Error(detailMsg);
+        }
+
+        // Redirect to payOS checkout url
+        const checkoutUrl = data?.checkout_url || data?.checkoutUrl;
+        if (checkoutUrl) {
+          console.log("[payOS] Redirecting to checkout URL:", checkoutUrl);
+          window.location.href = checkoutUrl;
+        } else {
+          console.error("[payOS] No checkout url found in response:", data);
+          throw new Error("No payment checkout URL returned from server.");
+        }
+      } catch (err: any) {
+        console.error("[payOS] Checkout generation failed:", err);
+        const errMsg = String(err.message || err);
+        const isSiteUrlErr = errMsg.includes("SITE_URL") || errMsg.includes("SITE_URL is not configured");
+
+        if (isSiteUrlErr) {
+          setErrorBanner(
+            <div className="space-y-2 py-1">
+              <span className="font-extrabold text-rose-900 block">Failed to initiate VietQR payment: SITE_URL is not configured.</span>
+              <p className="text-[11px] text-rose-700 leading-relaxed font-sans">
+                Your Supabase Edge Function expects the <code className="bg-rose-100 px-1 py-0.5 rounded font-mono font-bold text-rose-800">SITE_URL</code> secret to be configured for redirection callbacks. Run this command in your project terminal:
+              </p>
+              <div className="bg-slate-950 text-emerald-450 p-2.5 text-[11px] font-mono rounded-xl border border-slate-800 overflow-x-auto select-all shadow-sm">
+                supabase secrets set SITE_URL={window.location.origin}
+              </div>
+              <p className="text-[10px] text-slate-500 font-sans italic">
+                (Double-click inside the box to copy, then run using your Supabase CLI)
+              </p>
+            </div>
+          );
+        } else {
+          setErrorBanner("Failed to initiate VietQR payment: " + errMsg);
+        }
+      }
+    } else {
+      setErrorBanner("VietQR / payOS integration is only supported when Supabase is configured.");
+    }
+  };
+
+  const handleUpgradeTier = async (tier: "free" | "premium" | "payos") => {
+    if (!currentUser) return;
+
+    if (tier === "payos") {
+      await handleUpgradePayos();
+      return;
+    }
+
+    if (tier === "premium") {
+      if ((import.meta as any).env?.DEV !== true) {
+        setErrorBanner("Sandbox fallback trial is disabled on the production platform. Please use the real VietQR / Bank Transfer checkout option to immediately upgrade your profile.");
+        return;
+      }
+      await handleUpgradePremiumDemo();
+      return;
+    }
+
+    if (currentUser.role !== "admin") {
+      setErrorBanner("Access denied: Only administrators can modify subscription tiers.");
+      return;
+    }
 
     if (isSupabaseConfigured && supabase) {
       try {
         const { error } = await supabase
           .from("profiles")
-          .update({ is_premium: tier === "premium" })
+          .update({ is_premium: (tier as string) === "premium" })
           .eq("id", currentUser.id);
 
         if (!error) {
@@ -553,9 +1001,11 @@ export default function App() {
           await loadSupabaseWorkspaceData(currentUser.id, updated);
         } else {
           console.error("Failed upgrading user subscription tier in Sys profiles:", error);
+          setErrorBanner("Access denied: Supabase prevented your tier update.");
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
+        setErrorBanner("Access denied: " + err.message);
       }
     } else {
       try {
@@ -568,9 +1018,12 @@ export default function App() {
           const updated = { ...currentUser, subscription: tier };
           setCurrentUser(updated);
           await loadWorkspaceData(currentUser.id, updated);
+        } else {
+          setErrorBanner("Access denied: Server rejected the simulation tier upgrade.");
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
+        setErrorBanner("Access denied: Failed to contact the backend server.");
       }
     }
   };
@@ -1018,10 +1471,201 @@ export default function App() {
         // Reload items on success to refresh the active materials UI
         console.log(`[handleAIAction] Edge Function finished successfully, reloading materials for ${docId}`);
         await handleLoadMaterials(docId);
+        if (currentUser) {
+          await loadSupabaseWorkspaceData(currentUser.id, currentUser);
+        }
         return;
       } catch (err: any) {
-        console.error(`Supabase Edge Function ${endpoint} failed:`, err);
-        throw err;
+        console.warn(`[handleAIAction] Supabase Edge Function ${endpoint} failed. Attempting local Express generator fallback for document ${docId}. Error details:`, err);
+        
+        try {
+          // Find document in local state to supply raw text input to local Express backup
+          const matchingDoc = documents.find(d => d.id === docId);
+          const title = matchingDoc?.title || "Study Material";
+          const extractedText = matchingDoc?.extractedText || "";
+
+          // Local Express Fallback API request using current user's profile ID as the token
+          const token = currentUser.id;
+          const res = await fetch(`/api/documents/${docId}/${endpoint}`, {
+            method: "POST",
+            headers: { 
+              "Authorization": token,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              title,
+              extractedText
+            })
+          });
+          
+          if (!res.ok) {
+            const fallbackErr = await res.json();
+            throw new Error(fallbackErr.error || "Failed AI evaluation via fallback backend.");
+          }
+          
+          const fallbackData = await res.json();
+          console.log(`[handleAIAction:fallback-success] Local generator generated content via backup server:`, fallbackData);
+          
+          // Sync generated data back to the live Supabase tables to keep the database fresh
+          if (endpoint === "generate-summary") {
+            const overview = fallbackData.overview || "";
+            const key_points = fallbackData.keyPoints || [];
+            const summary_text = fallbackData.summaryText || "";
+            
+            console.log("[handleAIAction:fallback-sync] Syncing generated summary to Supabase...");
+            const { error: upsertErr } = await supabase
+              .from("summaries")
+              .upsert({
+                document_id: docId,
+                overview,
+                key_points,
+                summary_text,
+                created_at: new Date().toISOString()
+              }, { onConflict: 'document_id' });
+              
+            if (upsertErr) {
+              console.error("[handleAIAction:fallback-sync-error] Failed sync summary to Supabase:", upsertErr);
+            }
+          } else if (endpoint === "generate-flashcards") {
+            console.log("[handleAIAction:fallback-sync] Syncing generated flashcards to Supabase...");
+            // Clear old flashcards
+            await supabase.from("flashcards").delete().eq("document_id", docId);
+            
+            const listToInsert = (Array.isArray(fallbackData) ? fallbackData : []).map((c: any) => ({
+              document_id: docId,
+              front: String(c.front || "").trim(),
+              back: String(c.back || "").trim(),
+              leitner_box: 1,
+              created_at: new Date().toISOString()
+            }));
+            
+            if (listToInsert.length > 0) {
+              const { error: insertErr } = await supabase
+                .from("flashcards")
+                .insert(listToInsert);
+                
+              if (insertErr) {
+                console.error("[handleAIAction:fallback-sync-error] Failed sync flashcards to Supabase:", insertErr);
+              }
+            }
+          } else if (endpoint === "generate-quiz") {
+            console.log("[handleAIAction:fallback-sync] Syncing generated quiz to Supabase...");
+            const generatedQuiz = fallbackData; // returns { id, documentId, title, questions, createdAt }
+            const arrayQuestions = Array.isArray(generatedQuiz.questions) ? generatedQuiz.questions : [];
+            
+            // Delete old quiz and associated questions
+            const { data: oldQuizzes } = await supabase
+              .from("quizzes")
+              .select("id")
+              .eq("document_id", docId);
+              
+            if (oldQuizzes && oldQuizzes.length > 0) {
+              const oldQuizIds = oldQuizzes.map(q => q.id);
+              await supabase.from("questions").delete().in("quiz_id", oldQuizIds);
+            }
+            
+            await supabase
+              .from("quizzes")
+              .delete()
+              .eq("document_id", docId);
+              
+            const { data: newQuiz, error: insertQuizErr } = await supabase
+              .from("quizzes")
+              .insert({
+                document_id: docId,
+                title: generatedQuiz.title || "Practice Quiz",
+                created_at: new Date().toISOString()
+              })
+              .select()
+              .single();
+              
+            if (insertQuizErr || !newQuiz) {
+              console.error("[handleAIAction:fallback-sync-error] Failed sync quiz header:", insertQuizErr);
+            } else {
+              const questionsToInsert = arrayQuestions.map((q: any) => {
+                let correct = String(q.correctAnswerIndex !== undefined ? q.correctAnswerIndex : "0");
+                if (correct === "0" || correct === "A") correct = "A";
+                else if (correct === "1" || correct === "B") correct = "B";
+                else if (correct === "2" || correct === "C") correct = "C";
+                else if (correct === "3" || correct === "D") correct = "D";
+                else correct = "A";
+                
+                let optA = q.options?.[0] || q.option_a || "Option A";
+                let optB = q.options?.[1] || q.option_b || "Option B";
+                let optC = q.options?.[2] || q.option_c || "Option C";
+                let optD = q.options?.[3] || q.option_d || "Option D";
+                
+                return {
+                  quiz_id: newQuiz.id,
+                  question_text: String(q.text || q.question_text || "Question prompt").trim(),
+                  option_a: optA,
+                  option_b: optB,
+                  option_c: optC,
+                  option_d: optD,
+                  correct_answer: correct,
+                  explanation: q.explanation || "",
+                  created_at: new Date().toISOString()
+                };
+              });
+              
+              if (questionsToInsert.length > 0) {
+                const { error: insertQuestionsErr } = await supabase
+                  .from("questions")
+                  .insert(questionsToInsert);
+                  
+                if (insertQuestionsErr) {
+                  console.error("[handleAIAction:fallback-sync-error] Failed sync quiz questions:", insertQuestionsErr);
+                }
+              }
+            }
+          } else if (endpoint === "generate-studyplan") {
+            console.log("[handleAIAction:fallback-sync] Syncing generated study plan to Supabase...");
+            const generatedPlan = fallbackData; // { id, documentId, title, durationDays, tasks, createdAt }
+            
+            await supabase
+              .from("study_plans")
+              .delete()
+              .eq("document_id", docId)
+              .eq("user_id", currentUser.id);
+              
+            const cleanTasks = (Array.isArray(generatedPlan.tasks) ? generatedPlan.tasks : []).map((t: any) => ({
+              id: t.id || `task-${Math.random().toString(36).substr(2, 9)}`,
+              day: Number(t.day || t.dayNumber || 1),
+              dayNumber: Number(t.dayNumber || t.day || 1),
+              title: String(t.title || `Study Focus Material`).trim(),
+              description: String(t.description || "Review assigned parts and master learning materials.").trim(),
+              estimated_minutes: Number(t.estimatedMinutes || t.estimated_minutes || 30),
+              completed: !!(t.completed || t.isCompleted),
+              isCompleted: !!(t.isCompleted || t.completed)
+            }));
+            
+            const { error: insertErr } = await supabase
+              .from("study_plans")
+              .insert({
+                user_id: currentUser.id,
+                document_id: docId,
+                title: generatedPlan.title || "7-Day Study Plan",
+                duration_days: Number(generatedPlan.durationDays || 7),
+                tasks: cleanTasks,
+                created_at: new Date().toISOString()
+              });
+              
+            if (insertErr) {
+              console.error("[handleAIAction:fallback-sync-error] Failed sync study plan:", insertErr);
+            }
+          }
+          
+          // Reload items on success to refresh the active materials UI
+          console.log(`[handleAIAction] Fallback generator completed successfully, reloading materials for ${docId}`);
+          await handleLoadMaterials(docId);
+          if (currentUser) {
+            await loadSupabaseWorkspaceData(currentUser.id, currentUser);
+          }
+          return;
+        } catch (fallbackError: any) {
+          console.error(`[handleAIAction] Primary Edge connection AND local backup generation BOTH failed. Propagating core error to user. Backup error:`, fallbackError);
+          throw err;
+        }
       }
     }
 
@@ -1044,13 +1688,17 @@ export default function App() {
   };
 
   const handleSendChatMessage = async (message: string, chatHistory: any[]) => {
-    const token = localStorage.getItem("studymate_token") || "";
+    const token = currentUser?.id || localStorage.getItem("studymate_token") || "";
     if (!selectedDocId) throw new Error("No active document selected for context.");
+
+    const matchingDoc = documents.find((d) => d.id === selectedDocId);
+    const title = matchingDoc?.title || "Study Material";
+    const extractedText = matchingDoc?.extractedText || "";
 
     const res = await fetch(`/api/documents/${selectedDocId}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": token },
-      body: JSON.stringify({ message, chatHistory })
+      body: JSON.stringify({ message, chatHistory, title, extractedText })
     });
 
     if (!res.ok) {
@@ -1301,6 +1949,19 @@ export default function App() {
           </div>
         )}
 
+        {/* Success Notification Strip */}
+        {successBanner && (
+          <div className="max-w-7xl mx-auto px-4 pt-4 animate-in fade-in slide-in-from-top-3 duration-200">
+            <div className="p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl font-bold flex items-center justify-between">
+              <span className="flex items-center gap-1.5">
+                <CheckCircle2 className="h-4.5 w-4.5 text-emerald-600 animate-bounce" />
+                {successBanner}
+              </span>
+              <button onClick={() => setSuccessBanner(null)} className="text-[10px] text-emerald-600 hover:underline">Dismiss</button>
+            </div>
+          </div>
+        )}
+
         {currentView === "home" && (
           <HomeView
             currentUser={currentUser}
@@ -1309,6 +1970,10 @@ export default function App() {
             onUploadTextDocument={handleUploadTextDocument}
             onSupabaseLogin={handleSupabaseLogin}
             onSupabaseSignUp={handleSupabaseSignUp}
+            isResetPasswordMode={isResetPasswordMode}
+            onResetPasswordRequest={handleResetPasswordRequest}
+            onUpdatePassword={handleUpdatePassword}
+            setIsResetPasswordMode={setIsResetPasswordMode}
           />
         )}
 
@@ -1322,6 +1987,7 @@ export default function App() {
             onDeleteDocument={handleDeleteDocument}
             onToggleTask={handleToggleTask}
             onNavigate={(view) => setCurrentView(view)}
+            onUpgradeTier={handleUpgradeTier}
           />
         )}
 
@@ -1366,11 +2032,27 @@ export default function App() {
           />
         )}
 
-        {currentView === "admin" && currentUser?.role === "admin" && (
-          <AdminView
-            currentUser={currentUser}
-            onNavigate={(view) => setCurrentView(view)}
-          />
+        {currentView === "admin" && (
+          currentUser?.role === "admin" ? (
+            <AdminView
+              currentUser={currentUser}
+              onNavigate={(view) => setCurrentView(view)}
+            />
+          ) : (
+            <div className="max-w-md mx-auto my-12 p-8 bg-red-50/50 border border-red-200/60 rounded-2xl text-center space-y-4 shadow-xs" id="admin-access-denied">
+              <AlertCircle className="h-12 w-12 text-red-650 mx-auto animate-pulse" />
+              <h3 className="text-lg font-bold text-red-900 font-sans tracking-tight">Access Denied</h3>
+              <p className="text-xs text-red-700 leading-relaxed max-w-sm mx-auto font-sans">
+                Only enrolled administrators with <code className="bg-red-100/80 px-1 py-0.5 rounded text-red-800 font-mono text-[10px]">profiles.role = 'admin'</code> are authorized to access this administration terminal.
+              </p>
+              <button 
+                onClick={() => setCurrentView("dashboard")} 
+                className="inline-flex px-4 py-2 bg-slate-900 hover:bg-slate-850 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer transition-all"
+              >
+                Return to Dashboard
+              </button>
+            </div>
+          )
         )}
       </main>
 

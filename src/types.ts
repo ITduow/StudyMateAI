@@ -123,3 +123,17 @@ export interface ReportedContent {
   status: 'pending' | 'reviewed';
   createdAt: string;
 }
+
+export interface PaymentOrder {
+  id: string;
+  orderCode: string | number;
+  userId: string;
+  userEmail?: string;
+  amount: number;
+  currency: string;
+  provider: string;
+  status: string;
+  createdAt: string;
+  paidAt?: string | null;
+}
+

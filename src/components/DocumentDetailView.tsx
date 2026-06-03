@@ -6,9 +6,16 @@
 import React, { useState, useRef, useEffect } from "react";
 import { 
   FileText, ArrowLeft, Brain, HelpCircle, GraduationCap, Calendar, 
-  Send, Bot, User, RefreshCw, AlertTriangle, Sparkles, AlertCircle, Bookmark, CheckSquare 
+  Send, Bot, User, RefreshCw, AlertTriangle, Sparkles, AlertCircle, Bookmark, CheckSquare,
+  Download
 } from "lucide-react";
 import { Document, Summary, Quiz, Flashcard, StudyPlan } from "../types";
+import { 
+  exportQuizToCSV, 
+  exportQuizToPDF, 
+  exportFlashcardsToCSV, 
+  exportFlashcardsToPDF 
+} from "../lib/exportUtils";
 
 interface DocumentDetailViewProps {
   document: Document;
@@ -338,6 +345,28 @@ export function DocumentDetailView({
                         Re-generate Test
                       </button>
                     </div>
+
+                    <div className="pt-2 flex flex-col items-center justify-center gap-2 border-t border-slate-100/70 mt-6 pt-4">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">export learning material</span>
+                      <div className="flex gap-2.5">
+                        <button
+                          onClick={() => exportQuizToCSV(quiz, doc.title)}
+                          className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                          id="export-quiz-csv"
+                        >
+                          <Download className="h-3.5 w-3.5 text-slate-400" />
+                          Export Quiz CSV
+                        </button>
+                        <button
+                          onClick={() => exportQuizToPDF(quiz, doc.title)}
+                          className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                          id="export-quiz-pdf"
+                        >
+                          <Download className="h-3.5 w-3.5 text-slate-400" />
+                          Export Quiz PDF
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center py-12 space-y-4">
@@ -351,10 +380,32 @@ export function DocumentDetailView({
                     <button
                       onClick={() => handleGenerate("quiz")}
                       disabled={generatingTab !== null}
-                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer mb-2"
                     >
                       {generatingTab === "quiz" ? "Creating questions..." : "Generate AI Quiz Questions"}
                     </button>
+
+                    <div className="pt-2 flex flex-col items-center justify-center gap-2 border-t border-slate-100/70 mt-6 pt-4 opacity-50">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">export learning material (disabled)</span>
+                      <div className="flex gap-2.5">
+                        <button
+                          onClick={() => alert("No quiz data available to export. Please generate the quiz first!")}
+                          className="px-4 py-2 bg-slate-50 text-slate-400 border border-slate-150 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          id="export-quiz-csv-empty"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Export Quiz CSV
+                        </button>
+                        <button
+                          onClick={() => alert("No quiz data available to export. Please generate the quiz first!")}
+                          className="px-4 py-2 bg-slate-50 text-slate-400 border border-slate-150 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          id="export-quiz-pdf-empty"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Export Quiz PDF
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -387,6 +438,28 @@ export function DocumentDetailView({
                         Re-generate Cards
                       </button>
                     </div>
+
+                    <div className="pt-2 flex flex-col items-center justify-center gap-2 border-t border-slate-100/70 mt-6 pt-4">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">export learning material</span>
+                      <div className="flex gap-2.5">
+                        <button
+                          onClick={() => exportFlashcardsToCSV(flashcards, doc.title)}
+                          className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                          id="export-flashcards-csv"
+                        >
+                          <Download className="h-3.5 w-3.5 text-slate-400" />
+                          Export Flashcards CSV
+                        </button>
+                        <button
+                          onClick={() => exportFlashcardsToPDF(flashcards, doc.title)}
+                          className="px-4 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 hover:border-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                          id="export-flashcards-pdf"
+                        >
+                          <Download className="h-3.5 w-3.5 text-slate-400" />
+                          Export Flashcards PDF
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="text-center py-12 space-y-4">
@@ -400,10 +473,32 @@ export function DocumentDetailView({
                     <button
                       onClick={() => handleGenerate("flashcards")}
                       disabled={generatingTab !== null}
-                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer mb-2"
                     >
                       {generatingTab === "flashcards" ? "Crafting recall cards..." : "Generate AI Flashcards"}
                     </button>
+
+                    <div className="pt-2 flex flex-col items-center justify-center gap-2 border-t border-slate-100/70 mt-6 pt-4 opacity-50">
+                      <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 font-mono">export learning material (disabled)</span>
+                      <div className="flex gap-2.5">
+                        <button
+                          onClick={() => alert("No flashcard data available to export. Please generate the flashcards first!")}
+                          className="px-4 py-2 bg-slate-50 text-slate-400 border border-slate-150 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          id="export-flashcards-csv-empty"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Export Flashcards CSV
+                        </button>
+                        <button
+                          onClick={() => alert("No flashcard data available to export. Please generate the flashcards first!")}
+                          className="px-4 py-2 bg-slate-50 text-slate-400 border border-slate-150 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                          id="export-flashcards-pdf-empty"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Export Flashcards PDF
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -431,7 +526,7 @@ export function DocumentDetailView({
                         const isTaskCompleted = !!(task.isCompleted || task.completed);
                         return (
                           <div 
-                            key={task.id} 
+                            key={`${task.id || "task"}-${index}`} 
                             className={`p-4 border rounded-xl flex items-start gap-3 transition-all ${
                               isTaskCompleted 
                                 ? "bg-indigo-50/10 border-indigo-150/30 opacity-70" 

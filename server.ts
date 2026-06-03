@@ -360,6 +360,66 @@ const checkAIUsageAllowed = (userId: string): { allowed: boolean; usage: number 
   return { allowed: true, usage: currentUsage };
 };
 
+// Find document in local DB or construct a fallback using body options for Supabase users
+const findDocumentOrFallback = (id: string, body: any): { id: string; title: string; extractedText: string } | undefined => {
+  const doc = db.documents.find((d) => d.id === id);
+  if (doc) {
+    return {
+      id: doc.id,
+      title: doc.title,
+      extractedText: doc.extractedText
+    };
+  }
+  // Try fallback from request body
+  const title = body?.title || body?.documentTitle;
+  const extractedText = body?.extractedText || body?.extracted_text || body?.text || body?.content;
+  if (title && extractedText) {
+    return {
+      id,
+      title,
+      extractedText
+    };
+  }
+  return undefined;
+};
+
+const getUserIdFromAuthHeader = (authHeader: string | undefined): string | null => {
+  if (!authHeader) return null;
+  let token = authHeader;
+  if (token.startsWith("Bearer ")) {
+    token = token.slice(7);
+  }
+  token = token.trim();
+  if (token === "null" || token === "undefined" || token === "") {
+    return null;
+  }
+  return token;
+};
+
+// Auto-sync middleware to map Supabase authenticated users into local Express mock users DB
+app.use((req, res, next) => {
+  const rawId = getUserIdFromAuthHeader(req.headers.authorization);
+  if (rawId) {
+    // Check if user is already present in local db
+    let user = db.users.find((u) => u.id === rawId);
+    if (!user) {
+      // Create user entry dynamically so local database operations succeed seamlessly
+      user = {
+        id: rawId,
+        email: rawId.includes("@") ? rawId : `student-${rawId.slice(0, 8)}@studymate.demo`,
+        name: "Student",
+        role: "student",
+        subscription: "free",
+        createdAt: new Date().toISOString()
+      };
+      db.users.push(user);
+      saveToDisk();
+      console.log(`[local-db-sync] Dynamically registered unknown session user globally: ${rawId}`);
+    }
+  }
+  next();
+});
+
 /* --- API ROUTES --- */
 
 // 1. AUTH & ROLE MANAGEMENT
@@ -435,9 +495,26 @@ app.post("/api/users/upgrade", (req, res) => {
   const user = db.users.find((u) => u.id === token);
   if (!user) return res.status(404).json({ error: "User not found" });
 
+  if (user.role !== "admin") {
+    return res.status(403).json({ error: "Access denied - Only administrators can modify subscription status" });
+  }
+
   user.subscription = req.body.tier === "premium" ? "premium" : "free";
   saveToDisk();
   res.json({ success: true, user });
+});
+
+app.post("/api/users/upgrade-premium", (req, res) => {
+  const userId = getUserIdFromAuthHeader(req.headers.authorization);
+  if (!userId) return res.status(401).json({ error: "Unauthorized user", details: "Please login again." });
+
+  const user = db.users.find((u) => u.id === userId);
+  if (!user) return res.status(404).json({ error: "User not found", details: "Please register or login again." });
+
+  user.subscription = "premium";
+  saveToDisk();
+  console.log(`[local-admin-sync] Upgraded local mock user subscription to premium for: ${user.id}`);
+  res.json({ success: true, is_premium: true, user });
 });
 
 // 2. DOCUMENT UPLOADS & TEXT EXTRACTION
@@ -567,7 +644,7 @@ app.post("/api/documents/:id/generate-summary", async (req, res) => {
     });
   }
 
-  const doc = db.documents.find((d) => d.id === req.params.id);
+  const doc = findDocumentOrFallback(req.params.id, req.body);
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
   try {
@@ -664,7 +741,7 @@ app.post("/api/documents/:id/generate-quiz", async (req, res) => {
     });
   }
 
-  const doc = db.documents.find((d) => d.id === req.params.id);
+  const doc = findDocumentOrFallback(req.params.id, req.body);
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
   try {
@@ -792,7 +869,7 @@ app.post("/api/documents/:id/generate-flashcards", async (req, res) => {
     });
   }
 
-  const doc = db.documents.find((d) => d.id === req.params.id);
+  const doc = findDocumentOrFallback(req.params.id, req.body);
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
   try {
@@ -883,7 +960,7 @@ app.post("/api/documents/:id/generate-studyplan", async (req, res) => {
     });
   }
 
-  const doc = db.documents.find((d) => d.id === req.params.id);
+  const doc = findDocumentOrFallback(req.params.id, req.body);
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
   try {
@@ -967,7 +1044,7 @@ app.post("/api/documents/:id/chat", async (req, res) => {
   const { message, chatHistory } = req.body;
   if (!message) return res.status(400).json({ error: "Message is required" });
 
-  const doc = db.documents.find((d) => d.id === req.params.id);
+  const doc = findDocumentOrFallback(req.params.id, req.body);
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
   try {

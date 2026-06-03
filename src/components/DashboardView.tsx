@@ -19,11 +19,12 @@ interface DashboardViewProps {
     avgMasteryRate?: number;
     lastStudiedDocTitle?: string;
   };
-  upcomingTasks: { id: string; title: string; description: string; dayNumber: number; isCompleted: boolean; docTitle: string }[];
+  upcomingTasks: { id: string; title: string; description: string; dayNumber: number; isCompleted: boolean; docTitle: string; docId?: string }[];
   onDocumentClick: (docId: string) => void;
   onDeleteDocument: (docId: string) => void;
   onToggleTask: (taskId: string) => void;
   onNavigate: (view: string) => void;
+  onUpgradeTier?: (tier: "free" | "premium" | "payos") => void;
 }
 
 export function DashboardView({
@@ -34,7 +35,8 @@ export function DashboardView({
   onDocumentClick,
   onDeleteDocument,
   onToggleTask,
-  onNavigate
+  onNavigate,
+  onUpgradeTier
 }: DashboardViewProps) {
   
   // Progress calculations
@@ -85,6 +87,52 @@ export function DashboardView({
           <PlusCircle className="h-4.5 w-4.5" />
           Upload New Document
         </button>
+      </div>
+
+      {/* Premium Upgrade Promotion Banner Card */}
+      <div className="glass-effect-card rounded-[24px] p-6 border-l-4 border-l-indigo-650 flex flex-col md:flex-row md:items-center justify-between gap-6 shadow-xs relative overflow-hidden bg-white/45 backdrop-blur-xl" id="premium-status-promo-banner">
+        <div className="space-y-1.5 flex-1">
+          {currentUser.subscription === "premium" ? (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-150 uppercase tracking-widest font-mono">
+                  Badge: Premium
+                </span>
+                <span className="text-xs font-semibold text-gray-300">•</span>
+                <h3 className="font-extrabold text-sm tracking-tight text-gray-900">Premium Account</h3>
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed font-sans">
+                Higher AI generation limits enabled. Thank you for activating StudyMate Premium to copilot your education!
+              </p>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-yellow-50 text-yellow-700 border border-yellow-200 uppercase tracking-widest font-mono">
+                  Free Account
+                </span>
+                <span className="text-xs font-semibold text-gray-300">•</span>
+                <h3 className="font-extrabold text-sm tracking-tight text-gray-900 font-display text-slate-800">Daily AI limit is limited</h3>
+              </div>
+              <p className="text-xs text-gray-500 leading-relaxed font-sans">
+                Unlock infinite summarizing, custom flashcard creation, and comprehensive study planning tools with no boundaries.
+              </p>
+            </>
+          )}
+        </div>
+        {currentUser.subscription !== "premium" && (
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => onUpgradeTier?.("payos")}
+              className="flex items-center justify-center gap-1.5 py-2 px-4 bg-gradient-to-r from-indigo-600 to-indigo-750 hover:scale-[1.02] text-white font-extrabold text-xs rounded-xl shadow-md shadow-indigo-500/10 cursor-pointer transition-all flex-shrink-0 font-sans"
+              id="upgrade-to-premium-payos-button"
+            >
+              <Sparkles className="h-4 w-4 animate-pulse text-amber-300" />
+              Upgrade with VietQR / Bank Transfer
+            </button>
+
+          </div>
+        )}
       </div>
 
       {/* Main Bento Statistics Grid Row */}
@@ -325,9 +373,9 @@ export function DashboardView({
               </div>
             ) : (
               <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
-                {upcomingTasks.map((task) => (
+                {upcomingTasks.map((task, idx) => (
                   <div
-                    key={task.id}
+                    key={`${task.docId || "doc"}-${task.id || "task"}-${idx}`}
                     className={`p-3 rounded-xl border transition-all ${
                       task.isCompleted 
                         ? "bg-white/20 border-slate-250/30 opacity-70" 
